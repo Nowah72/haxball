@@ -8,39 +8,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const GOAL_WIDTH = 100;
     const GOAL_DEPTH = 40;
     const GOAL_POST_WIDTH = 8;
-    const EXACT_WIDTH = 810;
-const EXACT_HEIGHT = 1160;
-const EXACT_CENTER_X = 405;
-const EXACT_CENTER_Y = 580;
-const LEFT_FENCE = EXACT_CENTER_X - (EXACT_WIDTH / 2) + FENCE_WIDTH;
-const RIGHT_FENCE = EXACT_CENTER_X + (EXACT_WIDTH / 2) - FENCE_WIDTH;
-const countdownOverlay = document.getElementById('countdown-overlay');
-const countdownNumber = document.getElementById('countdown-number');
-
-const testButton = document.createElement('button');
-testButton.textContent = 'Test Countdown';
-testButton.style.cssText = 'position: absolute; top: 10px; right: 10px; z-index: 2000; padding: 10px;';
-testButton.onclick = showHTMLCountdown;
-document.body.appendChild(testButton);
-
-if (!countdownOverlay) {
-    const overlay = document.createElement('div');
-    overlay.id = 'countdown-overlay';
-    overlay.style.cssText = 'display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(0,0,0,0.8); width: 200px; height: 200px; border: 5px solid red; z-index: 1000; display: flex; align-items: center; justify-content: center;';
-    
-    const number = document.createElement('span');
-    number.id = 'countdown-number';
-    number.style.cssText = 'color: white; font-size: 120px; font-weight: bold;';
-    number.textContent = '3';
-    
-    overlay.appendChild(number);
-    document.body.appendChild(overlay);
-    
-    console.log("Created countdown overlay elements");
-}
-const countdownOverlayEl = document.getElementById('countdown-overlay');
-const countdownNumberEl = document.getElementById('countdown-number');
-
     
     // DOM Elements
     const mainMenu = document.getElementById('mainMenu');
@@ -95,17 +62,6 @@ const countdownNumberEl = document.getElementById('countdown-number');
         gameActive: false,
         ping: 0
     };
-    let fieldInfo = {
-        width: 0,
-        height: 0,
-        playableLeft: 0,
-        playableRight: 0,
-        playableTop: 0,
-        playableBottom: 0,
-        centerX: 0,
-        centerY: 0,
-        initialized: false
-    };
     
     // Connect to server
     const socket = io();
@@ -131,16 +87,6 @@ const countdownNumberEl = document.getElementById('countdown-number');
         roomCodeDisplay.textContent = roomId;
     });
     
-    socket.on('kickoff-complete', () => {
-        gameState.kickoff = false;
-        gameState.kickoffRestrictions = true; // Restrictions remain until ball touched
-        addChatMessage('System', 'Ball ready to play! Only ' + gameState.kickoffTeam.toUpperCase() + ' team can touch the ball.');
-    });
-    socket.on('kickoff-restrictions-end', () => {
-        gameState.kickoffRestrictions = false;
-        addChatMessage('System', 'Ball in play!');
-    });
-
     socket.on('room-joined', (data) => {
         console.log('Joined room:', data);
         gameState.currentRoom = data.roomId;
@@ -207,8 +153,6 @@ const countdownNumberEl = document.getElementById('countdown-number');
         gameState.players = data.players;
         gameState.score = data.score;
         gameState.gameActive = true;
-        gameState.kickoff = true;
-        gameState.kickoffTeam = data.kickoffTeam;
         
         // Display scores
         redScore.textContent = data.score.red;
@@ -221,9 +165,6 @@ const countdownNumberEl = document.getElementById('countdown-number');
         // Make sure canvas is properly sized
         resizeCanvas();
         
-        // Show HTML countdown
-        //manualCountdown();
-        
         // Start game loop
         gameLoop();
         
@@ -231,39 +172,21 @@ const countdownNumberEl = document.getElementById('countdown-number');
         addChatMessage('System', 'Game started! Use WASD or arrow keys to move. SPACE to shoot.');
     });
     
+    socket.on('kickoff-complete', () => {
+        addChatMessage('System', 'Ball in play!');
+    });
+    
     socket.on('game-update', (data) => {
-        // Calculate ping only if we've sent input
-        if (gameState.lastInputTime > 0) {
-            const now = Date.now();
-            gameState.ping = now - gameState.lastInputTime;
-            // Reset lastInputTime to avoid increasing ping when not sending inputs
-            gameState.lastInputTime = 0;
-        }
+        // Calculate ping
+        const now = Date.now();
+        gameState.ping = now - gameState.lastInputTime;
         
-        // Update all players with server positions
-        Object.keys(data.players).forEach(playerId => {
-            if (gameState.players[playerId]) {
-                // Store server position
-                gameState.players[playerId].serverX = data.players[playerId].x;
-                gameState.players[playerId].serverY = data.players[playerId].y;
-                
-                // If this is not the current player, update directly
-                if (playerId !== gameState.playerId) {
-                    gameState.players[playerId].x = data.players[playerId].x;
-                    gameState.players[playerId].y = data.players[playerId].y;
-                }
-                
-                // Copy other properties
-                gameState.players[playerId].vx = data.players[playerId].vx;
-                gameState.players[playerId].vy = data.players[playerId].vy;
-            }
-        });
-        
-        // Always update ball directly
+        // Update game state
         gameState.ball = data.ball;
+        gameState.players = data.players;
+        gameState.score = data.score;
         
         // Update score display
-        gameState.score = data.score;
         redScore.textContent = data.score.red;
         blueScore.textContent = data.score.blue;
     });
@@ -277,12 +200,6 @@ const countdownNumberEl = document.getElementById('countdown-number');
         redScore.textContent = score.red;
         blueScore.textContent = score.blue;
         
-        // Show HTML countdown
-        //manualCountdown();
-        
-        // Update kickoff team
-        gameState.kickoffTeam = team === 'red' ? 'blue' : 'red';
-        
         // Add message
         if (scorer && gameState.players[scorer]) {
             const scorerName = gameState.players[scorer].name;
@@ -291,7 +208,6 @@ const countdownNumberEl = document.getElementById('countdown-number');
             addChatMessage('System', `GOAL for ${teamName} team! (${score.red} - ${score.blue})`);
         }
     });
-    
     
     socket.on('game-ended', (data) => {
         gameState.gameActive = false;
@@ -571,23 +487,10 @@ const countdownNumberEl = document.getElementById('countdown-number');
     window.addEventListener('resize', resizeCanvas);
     
     function resizeCanvas() {
-        // Force exact dimensions
-        canvas.width = EXACT_WIDTH;
-        canvas.height = EXACT_HEIGHT;
-        
-        console.log(`Canvas size set to exact dimensions: ${EXACT_WIDTH}x${EXACT_HEIGHT}`);
-        console.log(`Field center: (${EXACT_CENTER_X}, ${EXACT_CENTER_Y})`);
-        
-        // Send size to server with exact values
-        if (gameState.currentRoom) {
-            socket.emit('canvas-size', {
-                width: EXACT_WIDTH,
-                height: EXACT_HEIGHT,
-                centerX: EXACT_CENTER_X,
-                centerY: EXACT_CENTER_Y
-            });
-        }
+        canvas.width = gameScreen.clientWidth;
+        canvas.height = gameScreen.clientHeight - 80; // Account for chat
     }
+    
     // Game loop
     function gameLoop() {
         if (!gameState.gameActive) return;
@@ -595,43 +498,12 @@ const countdownNumberEl = document.getElementById('countdown-number');
         // Send player input to server
         sendPlayerInput();
         
-        // Perform client-side prediction if needed
-        performClientPrediction();
-        
         // Render game
         renderGame();
         
         // Continue loop
         requestAnimationFrame(gameLoop);
     }
-    function drawDebugInfo() {
-        // Draw player positions received from server
-        Object.values(gameState.players).forEach(player => {
-            if (player.team === 'spectator') return;
-            
-            // Draw small dot at server position
-            ctx.fillStyle = 'yellow';
-            ctx.beginPath();
-            ctx.arc(player.serverX || player.x, player.serverY || player.y, 3, 0, Math.PI * 2);
-            ctx.fill();
-        });
-        
-        // Draw ball server position
-        if (gameState.ball) {
-            ctx.fillStyle = 'yellow';
-            ctx.beginPath();
-            ctx.arc(gameState.ball.x, gameState.ball.y, 3, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // Draw line to show where the ball should be
-            ctx.strokeStyle = 'yellow';
-            ctx.beginPath();
-            ctx.moveTo(gameState.ball.x, gameState.ball.y);
-            ctx.lineTo(EXACT_CENTER_X, EXACT_CENTER_Y);
-            ctx.stroke();
-        }
-    }
-    
     
     // Send player input to server
     function sendPlayerInput() {
@@ -665,48 +537,6 @@ const countdownNumberEl = document.getElementById('countdown-number');
             gameState.lastInputTime = Date.now();
         }
     }
-    function performClientPrediction() {
-        // Only predict for the current player
-        const currentPlayer = gameState.players[gameState.playerId];
-        if (!currentPlayer || currentPlayer.team === 'spectator') return;
-        
-        // Store the server position
-        if (!currentPlayer.serverX) {
-            currentPlayer.serverX = currentPlayer.x;
-            currentPlayer.serverY = currentPlayer.y;
-        }
-        
-        // Calculate client-side predicted position
-        // This will make movement feel more responsive
-        const input = gameState.lastInput || {};
-        
-        // Calculate direction from current input
-        let dx = 0, dy = 0;
-        if (input.left) dx -= 1;
-        if (input.right) dx += 1;
-        if (input.up) dy -= 1;
-        if (input.down) dy += 1;
-        
-        // Normalize diagonal movement
-        if (dx !== 0 && dy !== 0) {
-            const length = Math.sqrt(dx * dx + dy * dy);
-            dx /= length;
-            dy /= length;
-        }
-        
-        // Apply very small prediction (just enough to feel responsive)
-        // but not so much that server corrections are jarring
-        const PREDICTION_AMOUNT = 2;
-        if (dx !== 0 || dy !== 0) {
-            currentPlayer.x += dx * PREDICTION_AMOUNT;
-            currentPlayer.y += dy * PREDICTION_AMOUNT;
-        }
-        
-        // Gradually interpolate back to server position
-        const LERP_FACTOR = 0.2;
-        currentPlayer.x = currentPlayer.x * (1 - LERP_FACTOR) + currentPlayer.serverX * LERP_FACTOR;
-        currentPlayer.y = currentPlayer.y * (1 - LERP_FACTOR) + currentPlayer.serverY * LERP_FACTOR;
-    }
     
     // Render the game
     function renderGame() {
@@ -722,54 +552,27 @@ const countdownNumberEl = document.getElementById('countdown-number');
         // Draw ball
         drawBall();
         
-        // Draw countdown animation if kickoff is active
-        if (gameState.kickoff) {
-            drawKickoffCountdown();
-        }
-        
         // Draw ping
         drawPing();
-        directDrawCountdown();
-    }
-    function drawKickoffRestrictions() {
-        if (!gameState.kickoffTeam) return;
-        
-        // Draw semi-transparent center circle
-        const kickoffColor = gameState.kickoffTeam === 'red' ? 
-            'rgba(231, 76, 60, 0.2)' : 
-            'rgba(52, 152, 219, 0.2)';
-        
-        // Highlight center circle
-        ctx.fillStyle = kickoffColor;
-        ctx.beginPath();
-        ctx.arc(EXACT_CENTER_X, EXACT_CENTER_Y, CENTER_CIRCLE_RADIUS, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // Highlight the midline
-        ctx.strokeStyle = kickoffColor;
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(EXACT_CENTER_X, 0);
-        ctx.lineTo(EXACT_CENTER_X, canvas.height);
-        ctx.stroke();
     }
     
     // Draw the field
     function drawField() {
         // Field background
         ctx.fillStyle = '#1a472a'; // Dark green
-        ctx.fillRect(0, 0, EXACT_WIDTH, EXACT_HEIGHT);
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
         
-        // Draw checkerboard pattern only inside fence area
+        // Draw checkerboard pattern
         ctx.fillStyle = '#235c37'; // Slightly lighter green
         const patternSize = FIELD_PATTERN_SIZE;
         
-        // Only draw checkers within the playable area
-        for (let x = LEFT_FENCE; x < RIGHT_FENCE; x += patternSize) {
-            for (let y = 0; y < EXACT_HEIGHT; y += patternSize) {
+        // Only draw checkers within the fence boundaries
+        for (let x = FENCE_WIDTH; x < canvas.width - FENCE_WIDTH; x += patternSize) {
+            for (let y = 0; y < canvas.height; y += patternSize) {
                 // Only fill every other square for checkered pattern
                 if ((Math.floor(x / patternSize) + Math.floor(y / patternSize)) % 2 === 0) {
-                    const drawWidth = Math.min(patternSize, RIGHT_FENCE - x);
+                    // Ensure we don't draw outside the playing field
+                    const drawWidth = Math.min(patternSize, canvas.width - FENCE_WIDTH - x);
                     ctx.fillRect(x, y, drawWidth, patternSize);
                 }
             }
@@ -779,59 +582,26 @@ const countdownNumberEl = document.getElementById('countdown-number');
         ctx.strokeStyle = 'white';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(EXACT_CENTER_X, 0);
-        ctx.lineTo(EXACT_CENTER_X, EXACT_HEIGHT);
+        ctx.moveTo(canvas.width / 2, 0);
+        ctx.lineTo(canvas.width / 2, canvas.height);
         ctx.stroke();
         
         // Center circle
         ctx.beginPath();
-        ctx.arc(EXACT_CENTER_X, EXACT_CENTER_Y, CENTER_CIRCLE_RADIUS, 0, Math.PI * 2);
+        ctx.arc(canvas.width / 2, canvas.height / 2, CENTER_CIRCLE_RADIUS, 0, Math.PI * 2);
         ctx.stroke();
         
-        // Center spot (enlarged for visibility)
+        // Center spot
         ctx.fillStyle = 'white';
         ctx.beginPath();
-        ctx.arc(EXACT_CENTER_X, EXACT_CENTER_Y, 5, 0, Math.PI * 2);
+        ctx.arc(canvas.width / 2, canvas.height / 2, 3, 0, Math.PI * 2);
         ctx.fill();
         
-        // Draw goals and fence
+        // Draw goals
         drawGoals();
+        
+        // Draw fence
         drawFence();
-    }
-    function showHTMLCountdown() {
-        if (!countdownOverlayEl || !countdownNumberEl) {
-            console.error("Countdown elements not found!");
-            return;
-        }
-        
-        // Set initial value
-        countdownNumberEl.textContent = '3';
-        countdownOverlayEl.style.display = 'flex';
-        console.log("SHOWING COUNTDOWN: 3");
-        
-        // 2
-        setTimeout(() => {
-            countdownNumberEl.textContent = '2';
-            console.log("COUNTDOWN: 2");
-        }, 1000);
-        
-        // 1
-        setTimeout(() => {
-            countdownNumberEl.textContent = '1';
-            console.log("COUNTDOWN: 1");
-        }, 2000);
-        
-        // GO
-        setTimeout(() => {
-            countdownNumberEl.textContent = 'GO!';
-            console.log("COUNTDOWN: GO");
-        }, 3000);
-        
-        // Hide
-        setTimeout(() => {
-            countdownOverlayEl.style.display = 'none';
-            console.log("COUNTDOWN HIDDEN");
-        }, 4000);
     }
     
     // Draw goals
@@ -840,41 +610,41 @@ const countdownNumberEl = document.getElementById('countdown-number');
         ctx.strokeStyle = 'red';
         ctx.lineWidth = 4;
         ctx.beginPath();
-        ctx.arc(LEFT_FENCE - 5, EXACT_CENTER_Y, GOAL_WIDTH / 2, Math.PI / 2, -Math.PI / 2);
+        ctx.arc(FENCE_WIDTH - 5, canvas.height / 2, GOAL_WIDTH / 2, Math.PI / 2, -Math.PI / 2);
         ctx.stroke();
         
         // Red goal post dots
         ctx.fillStyle = 'red';
         ctx.beginPath();
-        ctx.arc(LEFT_FENCE, EXACT_CENTER_Y - GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
+        ctx.arc(FENCE_WIDTH, canvas.height / 2 - GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(LEFT_FENCE, EXACT_CENTER_Y + GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
+        ctx.arc(FENCE_WIDTH, canvas.height / 2 + GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
         ctx.fill();
         
         // Right goal (blue)
         ctx.strokeStyle = 'blue';
         ctx.lineWidth = 4;
         ctx.beginPath();
-        ctx.arc(RIGHT_FENCE + 5, EXACT_CENTER_Y, GOAL_WIDTH / 2, Math.PI / 2, -Math.PI / 2, true);
+        ctx.arc(canvas.width - FENCE_WIDTH + 5, canvas.height / 2, GOAL_WIDTH / 2, Math.PI / 2, -Math.PI / 2, true);
         ctx.stroke();
         
         // Blue goal post dots
         ctx.fillStyle = 'blue';
         ctx.beginPath();
-        ctx.arc(RIGHT_FENCE, EXACT_CENTER_Y - GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
+        ctx.arc(canvas.width - FENCE_WIDTH, canvas.height / 2 - GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(RIGHT_FENCE, EXACT_CENTER_Y + GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
+        ctx.arc(canvas.width - FENCE_WIDTH, canvas.height / 2 + GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
         ctx.fill();
         
         // Left goal area
         ctx.fillStyle = 'rgba(231, 76, 60, 0.2)';
-        ctx.fillRect(0, EXACT_CENTER_Y - GOAL_WIDTH / 2, LEFT_FENCE, GOAL_WIDTH);
+        ctx.fillRect(0, canvas.height / 2 - GOAL_WIDTH / 2, FENCE_WIDTH, GOAL_WIDTH);
         
         // Right goal area
         ctx.fillStyle = 'rgba(52, 152, 219, 0.2)';
-        ctx.fillRect(RIGHT_FENCE, EXACT_CENTER_Y - GOAL_WIDTH / 2, FENCE_WIDTH, GOAL_WIDTH);
+        ctx.fillRect(canvas.width - FENCE_WIDTH, canvas.height / 2 - GOAL_WIDTH / 2, FENCE_WIDTH, GOAL_WIDTH);
         
         // Draw goal nets
         drawGoalNets();
@@ -888,32 +658,32 @@ const countdownNumberEl = document.getElementById('countdown-number');
         // Left goal net - vertical lines
         for (let i = 0; i <= 4; i++) {
             ctx.beginPath();
-            ctx.moveTo(LEFT_FENCE - i * (GOAL_DEPTH / 4), EXACT_CENTER_Y - GOAL_WIDTH / 2);
-            ctx.lineTo(LEFT_FENCE - i * (GOAL_DEPTH / 4), EXACT_CENTER_Y + GOAL_WIDTH / 2);
+            ctx.moveTo(-i * (GOAL_DEPTH / 4), canvas.height / 2 - GOAL_WIDTH / 2);
+            ctx.lineTo(-i * (GOAL_DEPTH / 4), canvas.height / 2 + GOAL_WIDTH / 2);
             ctx.stroke();
         }
         
         // Left goal net - horizontal lines
         for (let i = 0; i <= 4; i++) {
             ctx.beginPath();
-            ctx.moveTo(LEFT_FENCE, EXACT_CENTER_Y - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
-            ctx.lineTo(LEFT_FENCE - GOAL_DEPTH, EXACT_CENTER_Y - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
+            ctx.moveTo(0, canvas.height / 2 - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
+            ctx.lineTo(-GOAL_DEPTH, canvas.height / 2 - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
             ctx.stroke();
         }
         
         // Right goal net - vertical lines
         for (let i = 0; i <= 4; i++) {
             ctx.beginPath();
-            ctx.moveTo(RIGHT_FENCE + i * (GOAL_DEPTH / 4), EXACT_CENTER_Y - GOAL_WIDTH / 2);
-            ctx.lineTo(RIGHT_FENCE + i * (GOAL_DEPTH / 4), EXACT_CENTER_Y + GOAL_WIDTH / 2);
+            ctx.moveTo(canvas.width + i * (GOAL_DEPTH / 4), canvas.height / 2 - GOAL_WIDTH / 2);
+            ctx.lineTo(canvas.width + i * (GOAL_DEPTH / 4), canvas.height / 2 + GOAL_WIDTH / 2);
             ctx.stroke();
         }
         
         // Right goal net - horizontal lines
         for (let i = 0; i <= 4; i++) {
             ctx.beginPath();
-            ctx.moveTo(RIGHT_FENCE, EXACT_CENTER_Y - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
-            ctx.lineTo(RIGHT_FENCE + GOAL_DEPTH, EXACT_CENTER_Y - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
+            ctx.moveTo(canvas.width, canvas.height / 2 - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
+            ctx.lineTo(canvas.width + GOAL_DEPTH, canvas.height / 2 - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
             ctx.stroke();
         }
     }
@@ -925,122 +695,27 @@ const countdownNumberEl = document.getElementById('countdown-number');
         ctx.beginPath();
         
         // Left side (connecting with goal posts)
-        ctx.moveTo(LEFT_FENCE, 0);
-        ctx.lineTo(LEFT_FENCE, EXACT_CENTER_Y - GOAL_WIDTH / 2);
+        ctx.moveTo(FENCE_WIDTH, 0);
+        ctx.lineTo(FENCE_WIDTH, canvas.height / 2 - GOAL_WIDTH / 2);
         
         // Resume after left goal
-        ctx.moveTo(LEFT_FENCE, EXACT_CENTER_Y + GOAL_WIDTH / 2);
-        ctx.lineTo(LEFT_FENCE, EXACT_HEIGHT);
+        ctx.moveTo(FENCE_WIDTH, canvas.height / 2 + GOAL_WIDTH / 2);
+        ctx.lineTo(FENCE_WIDTH, canvas.height);
         
         // Bottom
-        ctx.lineTo(RIGHT_FENCE, EXACT_HEIGHT);
+        ctx.lineTo(canvas.width - FENCE_WIDTH, canvas.height);
         
         // Right side (connecting with goal posts)
-        ctx.lineTo(RIGHT_FENCE, EXACT_CENTER_Y + GOAL_WIDTH / 2);
+        ctx.lineTo(canvas.width - FENCE_WIDTH, canvas.height / 2 + GOAL_WIDTH / 2);
         
         // Resume after right goal
-        ctx.moveTo(RIGHT_FENCE, EXACT_CENTER_Y - GOAL_WIDTH / 2);
-        ctx.lineTo(RIGHT_FENCE, 0);
+        ctx.moveTo(canvas.width - FENCE_WIDTH, canvas.height / 2 - GOAL_WIDTH / 2);
+        ctx.lineTo(canvas.width - FENCE_WIDTH, 0);
         
         // Top
-        ctx.lineTo(LEFT_FENCE, 0);
+        ctx.lineTo(FENCE_WIDTH, 0);
         
         ctx.stroke();
-    }
-    function manualCountdown() {
-        // Remove any existing countdown elements
-        const existingOverlay = document.getElementById('countdown-overlay');
-        if (existingOverlay) {
-            document.body.removeChild(existingOverlay);
-        }
-        
-        // Create elements
-        const overlay = document.createElement('div');
-        overlay.id = 'countdown-overlay';
-        overlay.style.cssText = 'position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(0,0,0,0.8); width: 200px; height: 200px; border: 5px solid red; z-index: 1000; display: flex; align-items: center; justify-content: center;';
-        
-        const number = document.createElement('span');
-        number.id = 'countdown-number';
-        number.style.cssText = 'color: white; font-size: 120px; font-weight: bold;';
-        number.textContent = '3';
-        
-        overlay.appendChild(number);
-        document.body.appendChild(overlay);
-        console.log("Created new countdown elements: 3");
-        
-        // Number 2
-        setTimeout(() => {
-            // Create new number element
-            const newNumber = document.createElement('span');
-            newNumber.style.cssText = 'color: white; font-size: 120px; font-weight: bold;';
-            newNumber.textContent = '2';
-            
-            // Replace old number with new
-            overlay.innerHTML = '';
-            overlay.appendChild(newNumber);
-            console.log("Updated to: 2");
-        }, 1000);
-        
-        // Number 1
-        setTimeout(() => {
-            // Create new number element
-            const newNumber = document.createElement('span');
-            newNumber.style.cssText = 'color: white; font-size: 120px; font-weight: bold;';
-            newNumber.textContent = '1';
-            
-            // Replace old number with new
-            overlay.innerHTML = '';
-            overlay.appendChild(newNumber);
-            console.log("Updated to: 1");
-        }, 2000);
-        
-        // GO!
-        setTimeout(() => {
-            // Create new number element
-            const newNumber = document.createElement('span');
-            newNumber.style.cssText = 'color: white; font-size: 120px; font-weight: bold;';
-            newNumber.textContent = 'GO!';
-            
-            // Replace old number with new
-            overlay.innerHTML = '';
-            overlay.appendChild(newNumber);
-            console.log("Updated to: GO!");
-        }, 3000);
-        
-        // Remove overlay
-        setTimeout(() => {
-            document.body.removeChild(overlay);
-            console.log("Removed countdown");
-        }, 4000);
-    }
-    function drawKickoffCountdown() {
-        if (!gameState.kickoffStartTime) {
-            gameState.kickoffStartTime = Date.now();
-        }
-        
-        const timeSinceKickoff = Date.now() - gameState.kickoffStartTime;
-        let countdownText;
-        
-        if (timeSinceKickoff < 1000) {
-            countdownText = "3";
-        } else if (timeSinceKickoff < 2000) {
-            countdownText = "2";
-        } else if (timeSinceKickoff < 3000) {
-            countdownText = "1";
-        } else {
-            countdownText = "GO!";
-        }
-        
-        // Draw a simple black semi-transparent background
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.fillRect(EXACT_CENTER_X - 50, EXACT_CENTER_Y - 50, 100, 100);
-        
-        // Draw text in large white font
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 60px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(countdownText, EXACT_CENTER_X, EXACT_CENTER_Y);
     }
     
     // Draw players
@@ -1175,28 +850,6 @@ const countdownNumberEl = document.getElementById('countdown-number');
         ctx.font = '12px Arial';
         ctx.textAlign = 'right';
         ctx.fillText(`Ping: ${gameState.ping}ms`, canvas.width - 10, 20);
-    }
-    function directDrawCountdown() {
-        // Always draw on top of everything
-        if (showCountdown && countdownNumber) {
-            // HUGE BLACK BACKGROUND
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-            ctx.fillRect(EXACT_CENTER_X - 100, EXACT_CENTER_Y - 100, 200, 200);
-            
-            // HUGE WHITE TEXT
-            ctx.fillStyle = 'white';
-            ctx.font = 'bold 120px Arial';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(countdownNumber, EXACT_CENTER_X, EXACT_CENTER_Y);
-            
-            // Draw border for visibility
-            ctx.strokeStyle = 'red';
-            ctx.lineWidth = 5;
-            ctx.strokeRect(EXACT_CENTER_X - 100, EXACT_CENTER_Y - 100, 200, 200);
-            
-            console.log("DRAWING COUNTDOWN:", countdownNumber);
-        }
     }
     
     // Reset game state
