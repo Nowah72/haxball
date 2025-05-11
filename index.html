@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HaxBall Clone Multiplayer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Main Menu -->
+        <div id="mainMenu">
+            <h1 class="title">HaxBall Clone</h1>
+            <div class="menu">
+                <button class="btn btn-primary" id="createRoomBtn">Create Room</button>
+                <button class="btn btn-primary" id="joinRoomBtn">Join Room</button>
+                <div class="input-container" id="nameInput">
+                    <input type="text" class="input-field" id="playerNameField" placeholder="Enter Player's Name">
+                    <div class="arrow-btn" id="confirmNameBtn">→</div>
+                </div>
+                <div class="input-container" id="roomCodeInput" style="display: none;">
+                    <input type="text" class="input-field" id="roomCodeField" placeholder="Enter Room Code">
+                    <div class="arrow-btn" id="confirmRoomBtn">→</div>
+                </div>
+                <button class="btn" id="settingsBtn">Settings</button>
+                <button class="btn" id="quitBtn">Quit</button>
+            </div>
+        </div>
+
+        <!-- Lobby Screen -->
+        <div id="lobbyScreen">
+            <div class="lobby-header">
+                <h2>Game Lobby</h2>
+                <div class="room-info">
+                    <span>Room Code: </span>
+                    <span id="roomCodeDisplay" class="room-code"></span>
+                    <button class="copy-btn" id="copyRoomCodeBtn">Copy</button>
+                </div>
+            </div>
+            
+            <div class="teams-container">
+                <div class="team team-red">
+                    <div class="team-header red-header">RED TEAM</div>
+                    <div class="team-players" id="redTeam" data-team="red"></div>
+                </div>
+                <div class="team team-spectator">
+                    <div class="team-header">SPECTATORS</div>
+                    <div class="team-players" id="spectatorTeam" data-team="spectator"></div>
+                </div>
+                <div class="team team-blue">
+                    <div class="team-header blue-header">BLUE TEAM</div>
+                    <div class="team-players" id="blueTeam" data-team="blue"></div>
+                </div>
+            </div>
+            
+            <div class="game-settings">
+                <div class="setting-group">
+                    <label class="setting-label">Starting Team</label>
+                    <select class="setting-select" id="startingTeamSelect">
+                        <option value="red">Red Team</option>
+                        <option value="blue">Blue Team</option>
+                        <option value="random" selected>Random</option>
+                    </select>
+                </div>
+                <div class="setting-group">
+                    <label class="setting-label">Game Duration (minutes)</label>
+                    <select class="setting-select" id="gameDurationSelect">
+                        <option value="3">3</option>
+                        <option value="5" selected>5</option>
+                        <option value="10">10</option>
+                        <option value="15">15</option>
+                    </select>
+                </div>
+            </div>
+            
+            <button class="start-game-btn" id="startGameBtn">PLAY</button>
+        </div>
+
+        <!-- Game Screen -->
+        <div id="gameScreen">
+            <canvas id="gameCanvas"></canvas>
+            <div id="countdown-overlay" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(0,0,0,0.8); width: 200px; height: 200px; border: 5px solid red; z-index: 1000; display: flex; align-items: center; justify-content: center;">
+                <span id="countdown-number" style="color: white; font-size: 120px; font-weight: bold;">3</span>
+            </div>
+            <div class="scoreboard">
+                <span class="red-score" id="redScore">0</span>
+                <span>|</span>
+                <span class="blue-score" id="blueScore">0</span>
+            </div>
+            <button class="leave-btn" id="leaveGameBtn">Leave Game</button>
+            <div class="chat-container">
+                <div class="chat-messages" id="chatMessages"></div>
+                <div class="chat-input-container">
+                    <input type="text" class="chat-input" id="chatInput" placeholder="Type message...">
+                    <button class="chat-send-btn" id="chatSendBtn">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load Socket.IO -->
+    <script src="/socket.io/socket.io.js"></script>
+    <!-- Load game scripts -->
+    <script src="js/game.js"></script>
+</body>
+</html>
