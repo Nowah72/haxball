@@ -18,6 +18,16 @@
                     <input type="text" class="input-field" id="playerNameField" placeholder="Enter Player's Name">
                     <div class="arrow-btn" id="confirmNameBtn">→</div>
                 </div>
+                <!-- Stadium Selector - Add this after the name input -->
+                <div class="input-container" id="stadiumSelectorContainer" style="display: none;">
+                    <button id="stadiumDropdownBtn" class="stadium-dropdown-btn">
+                        <span>Select Stadium Size</span>
+                        <i class="arrow-down">▼</i>
+                    </button>
+                    <div id="stadiumDropdownContent" class="stadium-dropdown-content">
+                        <!-- Stadium options will be added via JavaScript -->
+                    </div>
+                </div>
                 <div class="input-container" id="roomCodeInput" style="display: none;">
                     <input type="text" class="input-field" id="roomCodeField" placeholder="Enter Room Code">
                     <div class="arrow-btn" id="confirmRoomBtn">→</div>
