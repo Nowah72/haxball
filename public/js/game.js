@@ -1,4 +1,5 @@
 document.addEventListener('DOMContentLoaded', function() {
+    console.log("DOM fully loaded");
     // Game Constants
     const PLAYER_RADIUS = 15;
     const BALL_RADIUS = 10;
@@ -48,6 +49,35 @@ document.addEventListener('DOMContentLoaded', function() {
     const ctx = canvas.getContext('2d');
     const startingTeamSelect = document.getElementById('startingTeamSelect');
     const gameDurationSelect = document.getElementById('gameDurationSelect');
+    const stadiumOptions = [
+        {
+            id: 'small',
+            name: 'Small Stadium',
+            description: 'Perfect for 1v1 or 2v2 matches',
+            width: 700,  // Smaller than the current stadium
+            height: 450,
+            image: 'images/stadium-small.svg', 
+            recommendedPlayers: '1v1 or 2v2'
+        },
+        {
+            id: 'medium',
+            name: 'Medium Stadium',
+            description: 'Ideal for 3v3 or 4v4 matches',
+            width: 1000, // Your current stadium size
+            height: 600,
+            image: 'images/stadium-medium.svg',
+            recommendedPlayers: '3v3 or 4v4'
+        },
+        {
+            id: 'large',
+            name: 'Large Stadium',
+            description: 'Best for 5v5 matches and up',
+            width: 1300, // Larger than the current stadium
+            height: 800,
+            image: 'images/stadium-large.svg',
+            recommendedPlayers: '5v5 and up'
+        }
+    ];
     
     // Game state
     let gameState = {
@@ -71,6 +101,7 @@ document.addEventListener('DOMContentLoaded', function() {
         gameActive: false,
         ping: 0,
         kickoffStartTime: null,
+        selectedStadium: 'medium',
     kickoffCountdownComplete: false,
     kickoffRestrictions: false,
     frictionEnabled: true, // Can be toggled in settings if needed
@@ -91,6 +122,77 @@ document.addEventListener('DOMContentLoaded', function() {
         centerY: 0,
         initialized: false
     };
+    createRoomBtn.onclick = function() {
+        console.log("Create Room button clicked");
+        nameInput.style.display = 'block';
+        stadiumSelectorContainer.style.display = 'block';
+        gameState.action = 'create';
+    };
+    
+    joinRoomBtn.onclick = function() {
+        console.log("Join Room button clicked");
+        nameInput.style.display = 'block';
+        gameState.action = 'join';
+    };
+    
+    confirmNameBtn.onclick = function() {
+        console.log("Confirm Name button clicked");
+        const name = playerNameField.value.trim();
+        if (name) {
+            gameState.playerName = name;
+            
+            // Join game with name
+            socket.emit('join-game', name);
+            
+            if (gameState.action === 'create') {
+                // Create room with selected stadium
+                socket.emit('create-room', {
+                    stadiumId: gameState.selectedStadium
+                });
+            } else if (gameState.action === 'join') {
+                // Show room code input
+                nameInput.style.display = 'none';
+                stadiumSelectorContainer.style.display = 'none';
+                roomCodeInput.style.display = 'block';
+            }
+        } else {
+            showNotification('Please enter a valid name', 'error');
+        }
+    };
+    
+    confirmRoomBtn.onclick = function() {
+        console.log("Confirm Room button clicked");
+        const roomCode = roomCodeField.value.trim().toUpperCase();
+        if (roomCode) {
+            // Join room
+            socket.emit('join-room', roomCode);
+        } else {
+            showNotification('Please enter a valid room code', 'error');
+        }
+    };
+    
+    copyRoomCodeBtn.onclick = function() {
+        const roomCode = roomCodeDisplay.textContent;
+        navigator.clipboard.writeText(roomCode)
+            .then(() => {
+                showNotification('Room code copied to clipboard');
+            })
+            .catch(() => {
+                showNotification('Failed to copy room code', 'error');
+            });
+    };
+    
+    settingsBtn.onclick = function() {
+        showNotification('Settings functionality will be added in the future');
+    };
+    
+    quitBtn.onclick = function() {
+        if (confirm('Are you sure you want to quit?')) {
+            window.close();
+        }
+    };
+
+    initializeStadiumSelector();
     
     // Connect to server
     const socket = io();
@@ -140,25 +242,42 @@ document.addEventListener('DOMContentLoaded', function() {
 
     socket.on('room-joined', (data) => {
         console.log('Joined room:', data);
-        gameState.currentRoom = data.roomId;
-        gameState.players = data.players;
-        gameState.teams = data.teams;
-        gameState.isHost = data.isHost;
+    gameState.currentRoom = data.roomId;
+    gameState.players = data.players;
+    gameState.teams = data.teams;
+    gameState.isHost = data.isHost;
+    gameState.stadiumId = data.stadiumId || 'medium';
+    
+    // Update UI
+    roomCodeDisplay.textContent = data.roomId;
+    startGameBtn.style.display = data.isHost ? 'block' : 'none';
+    
+    // Display stadium info if available
+    if (data.stadiumName) {
+        const existingInfo = document.querySelector('.stadium-info-display');
+        if (existingInfo) existingInfo.remove();
         
-        // Update UI
-        roomCodeDisplay.textContent = data.roomId;
-        startGameBtn.style.display = data.isHost ? 'block' : 'none';
-        renderTeams();
-        
-        // Switch to lobby screen
-        mainMenu.style.display = 'none';
-        lobbyScreen.style.display = 'flex';
+        const stadiumInfo = document.createElement('div');
+        stadiumInfo.className = 'stadium-info-display';
+        stadiumInfo.textContent = `Stadium: ${data.stadiumName}`;
+        stadiumInfo.style.marginLeft = '15px';
+        stadiumInfo.style.color = '#3498db';
+        document.querySelector('.lobby-header').appendChild(stadiumInfo);
+    }
+    
+    renderTeams();
+    
+    // Switch to lobby screen
+    mainMenu.style.display = 'none';
+    lobbyScreen.style.display = 'flex';
     });
     
     socket.on('player-joined', (data) => {
         console.log('Player joined:', data);
         gameState.players = data.players;
         gameState.teams = data.teams;
+        
+        // Clear team containers first to prevent duplicates
         renderTeams();
         showNotification(`${data.playerName} joined the game`);
     });
@@ -205,10 +324,29 @@ document.addEventListener('DOMContentLoaded', function() {
         gameState.score = data.score;
         gameState.gameActive = true;
         gameState.kickoff = true;
-        gameState.kickoffRestrictions = true; // Add this line
-        gameState.kickoffTeam = data.kickoffTeam; // Make sure this is set
+        gameState.kickoffRestrictions = true;
+        gameState.kickoffTeam = data.kickoffTeam;
         gameState.kickoffStartTime = null;
-        initializeParticleSystem();
+        
+        // Log kickoff team for debugging
+        console.log(`Starting kickoff: ${data.kickoffTeam} team`);
+        
+        // CRITICAL: Store the stadium configuration
+        gameState.stadiumConfig = data.stadiumConfig;
+        
+        // Set field dimensions based on the stadium config
+        if (data.stadiumConfig) {
+            console.log("Using stadium configuration:", data.stadiumConfig);
+            fieldDimensions = {
+                width: data.stadiumConfig.width,
+                height: data.stadiumConfig.height,
+                centerX: data.stadiumConfig.centerX,
+                centerY: data.stadiumConfig.centerY,
+                leftFence: data.stadiumConfig.fenceWidth,
+                rightFence: data.stadiumConfig.width - data.stadiumConfig.fenceWidth
+            };
+        }
+        
         // Display scores
         redScore.textContent = data.score.red;
         blueScore.textContent = data.score.blue;
@@ -217,25 +355,24 @@ document.addEventListener('DOMContentLoaded', function() {
         lobbyScreen.style.display = 'none';
         gameScreen.style.display = 'block';
         
-        // Make sure canvas is properly sized
-        resizeCanvas();
+        // Resize canvas to match stadium dimensions
+        resizeCanvasToStadium();
         
         // Send canvas size to server
         socket.emit('canvas-size', {
             width: canvas.width,
-            height: canvas.height,
-            fenceWidth: FENCE_WIDTH,
-            goalWidth: GOAL_WIDTH
+            height: canvas.height
         });
         
         // Start game loop
         gameLoop();
         
         // Add message
-        addChatMessage('System', 'Game started! Use WASD or arrow keys to move. SPACE to shoot.');
+        addChatMessage('System', `Game started! ${data.kickoffTeam.toUpperCase()} team kicks off. Use WASD or arrow keys to move. SPACE to shoot.`);
         
         // Log data for debugging
-        console.log("Game field size:", canvas.width, "x", canvas.height);
+        console.log("Game field size:", fieldDimensions.width, "x", fieldDimensions.height);
+        console.log("Field center:", fieldDimensions.centerX, fieldDimensions.centerY);
         console.log("Ball position:", data.ball.x, data.ball.y);
     });
     
@@ -291,6 +428,16 @@ document.addEventListener('DOMContentLoaded', function() {
         gameState.kickoffTeam = team === 'red' ? 'blue' : 'red';
         gameState.kickoffStartTime = null;
         
+        // Make sure ball is centered exactly
+        if (gameState.ball && gameState.stadiumConfig) {
+            gameState.ball.x = gameState.stadiumConfig.centerX;
+            gameState.ball.y = gameState.stadiumConfig.centerY;
+            gameState.ball.vx = 0;
+            gameState.ball.vy = 0;
+            
+            console.log(`Ball reset to ${gameState.ball.x}, ${gameState.ball.y} after goal`);
+        }
+        
         // Add message
         if (scorer && gameState.players[scorer]) {
             const scorerName = gameState.players[scorer].name;
@@ -299,7 +446,7 @@ document.addEventListener('DOMContentLoaded', function() {
             addChatMessage('System', `GOAL for ${teamName} team! (${score.red} - ${score.blue})`);
         }
         
-        // Trigger goal celebration effect - add this section
+        // Trigger goal celebration effect
         if (gameState.particlesEnabled) {
             let goalX, goalY;
             
@@ -361,7 +508,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Event listeners for UI elements
     createRoomBtn.addEventListener('click', () => {
         nameInput.style.display = 'block';
-        gameState.action = 'create';
+    document.getElementById('stadiumSelectorContainer').style.display = 'block';
+    gameState.action = 'create';
     });
     
     joinRoomBtn.addEventListener('click', () => {
@@ -378,11 +526,14 @@ document.addEventListener('DOMContentLoaded', function() {
             socket.emit('join-game', name);
             
             if (gameState.action === 'create') {
-                // Create room
-                socket.emit('create-room');
+                // Create room with selected stadium
+                socket.emit('create-room', {
+                    stadiumId: gameState.selectedStadium
+                });
             } else if (gameState.action === 'join') {
                 // Show room code input
                 nameInput.style.display = 'none';
+                document.getElementById('stadiumSelectorContainer').style.display = 'none';
                 roomCodeInput.style.display = 'block';
             }
         } else {
@@ -548,23 +699,37 @@ document.addEventListener('DOMContentLoaded', function() {
         blueTeamContainer.innerHTML = '';
         spectatorTeamContainer.innerHTML = '';
         
+        // Track players we've already rendered to prevent duplicates
+        const renderedPlayers = new Set();
+        
         // Render red team
         gameState.teams.red.forEach(player => {
+            if (renderedPlayers.has(player.id)) return; // Skip if already rendered
+            renderedPlayers.add(player.id);
+            
             const element = createPlayerElement(player);
             redTeamContainer.appendChild(element);
         });
         
         // Render blue team
         gameState.teams.blue.forEach(player => {
+            if (renderedPlayers.has(player.id)) return; // Skip if already rendered
+            renderedPlayers.add(player.id);
+            
             const element = createPlayerElement(player);
             blueTeamContainer.appendChild(element);
         });
         
         // Render spectators
         gameState.teams.spectator.forEach(player => {
+            if (renderedPlayers.has(player.id)) return; // Skip if already rendered
+            renderedPlayers.add(player.id);
+            
             const element = createPlayerElement(player);
             spectatorTeamContainer.appendChild(element);
         });
+        
+        console.log(`Rendered teams - Red: ${gameState.teams.red.length}, Blue: ${gameState.teams.blue.length}, Spectators: ${gameState.teams.spectator.length}`);
     }
     
     // Chat functionality
@@ -636,6 +801,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     // Game loop
     function gameLoop() {
+        if (!gameState.hasOwnProperty('particles')) {
+            gameState.particles = [];
+            gameState.goalParticles = [];
+            gameState.particlesEnabled = true;
+            gameState.lastTrailTime = 0;
+            gameState.trailFrequency = 50; // ms between trail particle spawns
+            gameState.goalCelebrationActive = false;
+            gameState.goalCelebrationStartTime = 0;
+            gameState.goalCelebrationDuration = 2500; // 2.5 seconds
+            console.log("Particle system initialized");
+        }
         if (!gameState.gameActive) return;
         
         // Calculate delta time for smoother animations
@@ -686,7 +862,25 @@ document.addEventListener('DOMContentLoaded', function() {
             ctx.stroke();
         }
     }
-    
+    function selectStadium(stadiumId) {
+        gameState.selectedStadium = stadiumId;
+        
+        // Find the selected stadium
+        const selected = stadiumOptions.find(stadium => stadium.id === stadiumId);
+        
+        // Update button text to show selection
+        document.querySelector('#stadiumDropdownBtn span').textContent = selected.name;
+        
+        // Highlight the selected option
+        const options = document.querySelectorAll('.stadium-option');
+        options.forEach(opt => {
+            if (opt.getAttribute('data-stadium-id') === stadiumId) {
+                opt.classList.add('selected');
+            } else {
+                opt.classList.remove('selected');
+            }
+        });
+    }
     
     // Send player input to server
     function sendPlayerInput() {
@@ -803,6 +997,79 @@ document.addEventListener('DOMContentLoaded', function() {
         currentPlayer.x = currentPlayer.x * (1 - CORRECTION_FACTOR) + currentPlayer.serverX * CORRECTION_FACTOR;
         currentPlayer.y = currentPlayer.y * (1 - CORRECTION_FACTOR) + currentPlayer.serverY * CORRECTION_FACTOR;
     }
+    function initializeStadiumSelector() {
+        console.log("Initializing horizontal stadium selector...");
+        const stadiumDropdownBtn = document.getElementById('stadiumDropdownBtn');
+        const stadiumDropdownContent = document.getElementById('stadiumDropdownContent');
+        
+        if (!stadiumDropdownBtn || !stadiumDropdownContent) {
+            console.error("Stadium selector elements not found!");
+            return;
+        }
+        
+        // Clear existing content
+        stadiumDropdownContent.innerHTML = '';
+        
+        // Add stadium options to the dropdown
+        stadiumOptions.forEach(stadium => {
+            console.log(`Adding stadium option: ${stadium.name}`);
+            const option = document.createElement('div');
+            option.className = 'stadium-option';
+            option.setAttribute('data-stadium-id', stadium.id);
+            
+            // Create a description tooltip
+            const tooltip = document.createElement('div');
+            tooltip.className = 'stadium-tooltip';
+            tooltip.textContent = stadium.description;
+            
+            option.innerHTML = `
+                <div class="stadium-image-container">
+                    <img src="${stadium.image}" alt="${stadium.name}" class="stadium-image">
+                </div>
+                <div class="stadium-info">
+                    <h3>${stadium.name}</h3>
+                    <span class="recommended">${stadium.recommendedPlayers}</span>
+                </div>
+            `;
+            
+            // Add the tooltip
+            option.appendChild(tooltip);
+            
+            // Add click event handler
+            option.onclick = function() {
+                console.log(`Stadium selected: ${stadium.id}`);
+                selectStadium(stadium.id);
+                stadiumDropdownContent.classList.remove('show');
+            };
+            
+            stadiumDropdownContent.appendChild(option);
+        });
+        
+        // Toggle dropdown on button click
+        stadiumDropdownBtn.onclick = function(e) {
+            console.log("Stadium dropdown button clicked");
+            e.preventDefault();
+            e.stopPropagation();
+            stadiumDropdownContent.classList.toggle('show');
+        };
+        
+        // Close the dropdown if clicked outside
+        document.addEventListener('click', function(e) {
+            if (!stadiumDropdownBtn.contains(e.target) && !stadiumDropdownContent.contains(e.target)) {
+                stadiumDropdownContent.classList.remove('show');
+            }
+        });
+        
+        // Position the dropdown directly under the button
+        stadiumDropdownContent.style.position = 'absolute';
+        stadiumDropdownContent.style.top = '100%';
+        stadiumDropdownContent.style.left = '0';
+        
+        // Select default stadium
+        selectStadium('medium');
+        console.log("Horizontal stadium selector initialized");
+    }
+    
     function initializeParticleSystem() {
         // Add some properties to the gameState object to track particles
         gameState.lastTrailTime = 0;
@@ -815,51 +1082,100 @@ document.addEventListener('DOMContentLoaded', function() {
     // Render the game
     // Render the game
     function renderGame() {
-        // Clear canvas
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        // Draw field
-        drawField();
-        
-        // Draw players
-        drawPlayers();
-        
-        // Draw ball
-        drawBall();
-        
-        // Draw particles - add this line
-        renderParticles();
-        
-        // Draw ping
-        drawPing();
-        
-        // Draw countdown animation if kickoff is active
-        if (gameState.kickoff) {
-            drawKickoffCountdown();
+        // Apply transformation to match stadium size
+        if (gameState.canvasScale) {
+            // Save current state
+            ctx.save();
+            
+            // Apply scaling transformation
+            ctx.scale(gameState.canvasScale.x, gameState.canvasScale.y);
+            
+            // Clear canvas - need to clear the ENTIRE canvas, not just the transformed area
+            ctx.resetTransform(); // Remove transformation temporarily
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.scale(gameState.canvasScale.x, gameState.canvasScale.y); // Reapply transformation
+            
+            // Draw field, players, ball, etc. using GAME coordinates
+            drawField();
+            
+            // Draw kickoff restrictions visualization BEFORE players
+            if (gameState.kickoffRestrictions) {
+                drawKickoffRestrictions();
+            }
+            
+            drawPlayers();
+            drawBall();
+            
+            // Render all particles
+            renderParticles();
+            
+            // Draw special effects AFTER players
+            if (gameState.kickoff) {
+                drawKickoffCountdown();
+            }
+            
+            // Restore original state
+            ctx.restore();
+        } else {
+            // Default rendering without scaling
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawField();
+            
+            if (gameState.kickoffRestrictions) {
+                drawKickoffRestrictions();
+            }
+            
+            drawPlayers();
+            drawBall();
+            renderParticles();
+            
+            if (gameState.kickoff) {
+                drawKickoffCountdown();
+            }
         }
+        
+        // Draw UI elements that should not be scaled
+        drawPing();
     }
-function drawKickoffRestrictions() {
-    if (!gameState.kickoffTeam) return;
-    
-    // Draw semi-transparent center circle
-    const kickoffColor = gameState.kickoffTeam === 'red' ? 
-        'rgba(231, 76, 60, 0.2)' : 
-        'rgba(52, 152, 219, 0.2)';
-    
-    // Highlight center circle
-    ctx.fillStyle = kickoffColor;
-    ctx.beginPath();
-    ctx.arc(fieldDimensions.centerX, fieldDimensions.centerY, CENTER_CIRCLE_RADIUS, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Highlight the midline
-    ctx.strokeStyle = kickoffColor;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(fieldDimensions.centerX, 0);
-    ctx.lineTo(fieldDimensions.centerX, fieldDimensions.height);
-    ctx.stroke();
-}
+    function drawKickoffRestrictions() {
+        if (!gameState.kickoffTeam) return;
+        
+        // Draw semi-transparent center circle
+        const kickoffColor = gameState.kickoffTeam === 'red' ? 
+            'rgba(231, 76, 60, 0.15)' : 
+            'rgba(52, 152, 219, 0.15)';
+        
+        // Get circle radius from stadium config if available
+        const centerCircleRadius = gameState.stadiumConfig ? 
+            Math.round(60 * (gameState.stadiumConfig.width / 1000)) : CENTER_CIRCLE_RADIUS;
+        
+        // Save context to restore later
+        ctx.save();
+        
+        // Highlight center circle - Fill with lower opacity
+        ctx.fillStyle = kickoffColor;
+        ctx.beginPath();
+        ctx.arc(fieldDimensions.centerX, fieldDimensions.centerY, centerCircleRadius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Highlight center circle - Outline with pulsing effect
+        const pulseSize = 1 + Math.sin(Date.now() / 200) * 0.5; // Subtle pulsing effect
+        ctx.strokeStyle = gameState.kickoffTeam === 'red' ? 'rgba(231, 76, 60, 0.7)' : 'rgba(52, 152, 219, 0.7)';
+        ctx.lineWidth = pulseSize;
+        ctx.beginPath();
+        ctx.arc(fieldDimensions.centerX, fieldDimensions.centerY, centerCircleRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        
+        // Highlight the midline with lower opacity and thinner line
+        ctx.strokeStyle = kickoffColor;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(fieldDimensions.centerX, 0);
+        ctx.lineTo(fieldDimensions.centerX, fieldDimensions.height);
+        ctx.stroke();
+        
+        ctx.restore();
+    }
     
     // Draw the field
     function drawField() {
@@ -867,162 +1183,311 @@ function drawKickoffRestrictions() {
         ctx.fillStyle = '#1a472a'; // Dark green
         ctx.fillRect(0, 0, fieldDimensions.width, fieldDimensions.height);
         
+        // Use stadium values for all drawing
+        const centerX = fieldDimensions.centerX;
+        const centerY = fieldDimensions.centerY;
+        const leftFence = fieldDimensions.leftFence;
+        const rightFence = fieldDimensions.rightFence;
+        
+        // Get goal width from stadium config if available
+        const goalWidth = gameState.stadiumConfig ? gameState.stadiumConfig.goalWidth : GOAL_WIDTH;
+        const centerCircleRadius = gameState.stadiumConfig ? 
+            Math.round(60 * (gameState.stadiumConfig.width / 1000)) : CENTER_CIRCLE_RADIUS;
+        
         // Draw checkerboard pattern only inside fence area
         ctx.fillStyle = '#235c37'; // Slightly lighter green
-        const patternSize = FIELD_PATTERN_SIZE;
+        const patternSize = Math.round(30 * (fieldDimensions.width / 1000)); // Scale pattern size to field width
         
         // Only draw checkers within the playable area
-        for (let x = fieldDimensions.leftFence; x < fieldDimensions.rightFence; x += patternSize) {
+        for (let x = leftFence; x < rightFence; x += patternSize) {
             for (let y = 0; y < fieldDimensions.height; y += patternSize) {
                 // Only fill every other square for checkered pattern
                 if ((Math.floor(x / patternSize) + Math.floor(y / patternSize)) % 2 === 0) {
-                    const drawWidth = Math.min(patternSize, fieldDimensions.rightFence - x);
+                    const drawWidth = Math.min(patternSize, rightFence - x);
                     ctx.fillRect(x, y, drawWidth, patternSize);
                 }
             }
         }
         
-        // Center line
+        // Center line - using exact center X
         ctx.strokeStyle = 'white';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.moveTo(fieldDimensions.centerX, 0);
-        ctx.lineTo(fieldDimensions.centerX, fieldDimensions.height);
+        ctx.moveTo(centerX, 0);
+        ctx.lineTo(centerX, fieldDimensions.height);
         ctx.stroke();
         
-        // Center circle
+        // Center circle - using exact center coordinates and scaled radius
         ctx.beginPath();
-        ctx.arc(fieldDimensions.centerX, fieldDimensions.centerY, CENTER_CIRCLE_RADIUS, 0, Math.PI * 2);
+        ctx.arc(centerX, centerY, centerCircleRadius, 0, Math.PI * 2);
         ctx.stroke();
         
         // Center spot (enlarged for visibility)
         ctx.fillStyle = 'white';
         ctx.beginPath();
-        ctx.arc(fieldDimensions.centerX, fieldDimensions.centerY, 5, 0, Math.PI * 2);
+        ctx.arc(centerX, centerY, 5, 0, Math.PI * 2);
         ctx.fill();
         
         // Draw goals and fence
         drawGoals();
         drawFence();
-        if (gameState.kickoffRestrictions) {
-            drawKickoffRestrictions();
+    }
+    function setupCanvasScaling() {
+        if (!gameState.stadiumConfig) {
+            console.warn("No stadium configuration available for scaling!");
+            return;
+        }
+        
+        // Get physical and logical dimensions
+        const physicalWidth = canvas.width;
+        const physicalHeight = canvas.height;
+        const logicalWidth = gameState.stadiumConfig.width;
+        const logicalHeight = gameState.stadiumConfig.height;
+        
+        // Calculate scale factors
+        const scaleX = physicalWidth / logicalWidth;
+        const scaleY = physicalHeight / logicalHeight;
+        
+        // Store scale factors in gameState for use in rendering
+        gameState.canvasScale = {
+            x: scaleX,
+            y: scaleY
+        };
+        
+        console.log(`Canvas scaling factors: ${scaleX}x, ${scaleY}y`);
+    }
+    function resizeCanvasToStadium() {
+        if (!gameState.stadiumConfig) {
+            console.warn("No stadium configuration available for resizing canvas!");
+            return resizeCanvas(); // Fall back to default resize
+        }
+        
+        // Get available screen space
+        const maxWidth = gameScreen.clientWidth;
+        const maxHeight = gameScreen.clientHeight - 80; // Account for chat
+        
+        // Get stadium dimensions
+        const stadiumRatio = gameState.stadiumConfig.width / gameState.stadiumConfig.height;
+        
+        // Calculate best fit within available space
+        let canvasWidth, canvasHeight;
+        
+        if (maxWidth / stadiumRatio <= maxHeight) {
+            // Width limited
+            canvasWidth = maxWidth;
+            canvasHeight = maxWidth / stadiumRatio;
+        } else {
+            // Height limited
+            canvasHeight = maxHeight;
+            canvasWidth = maxHeight * stadiumRatio;
+        }
+        
+        // Apply dimensions
+        canvas.width = canvasWidth;
+        canvas.height = canvasHeight;
+        
+        console.log(`Canvas resized to: ${canvas.width}x${canvas.height} for stadium: ${gameState.stadiumConfig.width}x${gameState.stadiumConfig.height}`);
+        setupCanvasScaling();
+    }
+    
+    // Draw goals
+    // Draw goals
+    function drawGoals() {
+        // Get values from stadium config if available
+        const centerX = fieldDimensions.centerX;
+        const centerY = fieldDimensions.centerY;
+        const leftFence = fieldDimensions.leftFence;
+        const rightFence = fieldDimensions.rightFence;
+        const goalWidth = gameState.stadiumConfig ? gameState.stadiumConfig.goalWidth : GOAL_WIDTH;
+        
+        // Left goal (red)
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(leftFence - 5, centerY, goalWidth / 2, Math.PI / 2, -Math.PI / 2);
+        ctx.stroke();
+        
+        // Red goal post dots
+        ctx.fillStyle = 'red';
+        ctx.beginPath();
+        ctx.arc(leftFence, centerY - goalWidth / 2, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(leftFence, centerY + goalWidth / 2, 6, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Right goal (blue)
+        ctx.strokeStyle = 'blue';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(rightFence + 5, centerY, goalWidth / 2, Math.PI / 2, -Math.PI / 2, true);
+        ctx.stroke();
+        
+        // Blue goal post dots
+        ctx.fillStyle = 'blue';
+        ctx.beginPath();
+        ctx.arc(rightFence, centerY - goalWidth / 2, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(rightFence, centerY + goalWidth / 2, 6, 0, Math.PI * 2);
+        ctx.fill();
+        
+        
+        // Draw goal nets
+        drawGoalNets();
+    }
+// Draw goal nets
+//SCOS MOMENTAN PENTRU CA NU STIU SA IL FAC FRUMOS
+function drawGoalNets() {
+    const centerY = fieldDimensions.centerY;
+    const leftFence = fieldDimensions.leftFence;
+    const rightFence = fieldDimensions.rightFence;
+    const goalWidth = gameState.stadiumConfig ? gameState.stadiumConfig.goalWidth : GOAL_WIDTH;
+    const goalDepth = gameState.stadiumConfig ? gameState.stadiumConfig.goalDepth : GOAL_DEPTH;
+    
+    // Save context for restoration later
+    ctx.save();
+    
+    // Parameters for circular net
+    const spacing = Math.floor(goalWidth / 6); // Grid spacing based on goal size
+    
+    // Left goal net (red)
+    // Calculate position
+    const leftGoalRadius = goalWidth / 2;
+    const leftGoalCenterX = leftFence;
+    const leftGoalCenterY = centerY;
+    
+    // Add goal depth shading (optional)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+    ctx.beginPath();
+    ctx.arc(leftGoalCenterX, leftGoalCenterY, leftGoalRadius, Math.PI * 1.5, Math.PI * 0.5, true);
+    ctx.lineTo(leftGoalCenterX, leftGoalCenterY + leftGoalRadius);
+    ctx.fill();
+    
+    // Draw red goal post markers
+    ctx.fillStyle = 'red';
+    ctx.beginPath();
+    ctx.arc(leftFence, centerY - goalWidth / 2, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(leftFence, centerY + goalWidth / 2, 4, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Removed the white goal frame arc
+    
+    // Draw net lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 2;
+    
+    // Vertical lines
+    for (let x = leftGoalCenterX - leftGoalRadius; x <= leftGoalCenterX; x += spacing) {
+        const halfHeight = Math.sqrt(Math.pow(leftGoalRadius, 2) - Math.pow(x - leftGoalCenterX, 2));
+        if (!isNaN(halfHeight)) {
+            ctx.beginPath();
+            ctx.moveTo(x, leftGoalCenterY - halfHeight);
+            ctx.lineTo(x, leftGoalCenterY + halfHeight);
+            ctx.stroke();
         }
     }
     
+    // Horizontal lines
+    for (let y = leftGoalCenterY - leftGoalRadius; y <= leftGoalCenterY + leftGoalRadius; y += spacing) {
+        const halfWidth = Math.sqrt(Math.pow(leftGoalRadius, 2) - Math.pow(y - leftGoalCenterY, 2));
+        if (!isNaN(halfWidth)) {
+            ctx.beginPath();
+            ctx.moveTo(leftGoalCenterX - halfWidth, y);
+            ctx.lineTo(leftGoalCenterX, y);
+            ctx.stroke();
+        }
+    }
     
-    // Draw goals
-    // Draw goals
-function drawGoals() {
-    // Left goal (red)
-    ctx.strokeStyle = 'red';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(fieldDimensions.leftFence - 5, fieldDimensions.centerY, GOAL_WIDTH / 2, Math.PI / 2, -Math.PI / 2);
-    ctx.stroke();
+    // Right goal net (blue)
+    // Calculate position
+    const rightGoalRadius = goalWidth / 2;
+    const rightGoalCenterX = rightFence;
+    const rightGoalCenterY = centerY;
     
-    // Red goal post dots
-    ctx.fillStyle = 'red';
+    // Add goal depth shading (optional)
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
     ctx.beginPath();
-    ctx.arc(fieldDimensions.leftFence, fieldDimensions.centerY - GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
+    ctx.arc(rightGoalCenterX, rightGoalCenterY, rightGoalRadius, Math.PI * 0.5, Math.PI * 1.5, true);
+    ctx.lineTo(rightGoalCenterX, rightGoalCenterY - rightGoalRadius);
     ctx.fill();
-    ctx.beginPath();
-    ctx.arc(fieldDimensions.leftFence, fieldDimensions.centerY + GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
-    ctx.fill();
     
-    // Right goal (blue)
-    ctx.strokeStyle = 'blue';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.arc(fieldDimensions.rightFence + 5, fieldDimensions.centerY, GOAL_WIDTH / 2, Math.PI / 2, -Math.PI / 2, true);
-    ctx.stroke();
-    
-    // Blue goal post dots
+    // Draw blue goal post markers
     ctx.fillStyle = 'blue';
     ctx.beginPath();
-    ctx.arc(fieldDimensions.rightFence, fieldDimensions.centerY - GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
+    ctx.arc(rightFence, centerY - goalWidth / 2, 4, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(fieldDimensions.rightFence, fieldDimensions.centerY + GOAL_WIDTH / 2, 6, 0, Math.PI * 2);
+    ctx.arc(rightFence, centerY + goalWidth / 2, 4, 0, Math.PI * 2);
     ctx.fill();
     
-    // Left goal area
-    ctx.fillStyle = 'rgba(231, 76, 60, 0.2)';
-    ctx.fillRect(0, fieldDimensions.centerY - GOAL_WIDTH / 2, fieldDimensions.leftFence, GOAL_WIDTH);
+    // Removed the white goal frame arc
     
-    // Right goal area
-    ctx.fillStyle = 'rgba(52, 152, 219, 0.2)';
-    ctx.fillRect(fieldDimensions.rightFence, fieldDimensions.centerY - GOAL_WIDTH / 2, FENCE_WIDTH, GOAL_WIDTH);
+    // Draw net lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 2;
     
-    // Draw goal nets
-    drawGoalNets();
+    // Vertical lines
+    for (let x = rightGoalCenterX; x <= rightGoalCenterX + rightGoalRadius; x += spacing) {
+        const halfHeight = Math.sqrt(Math.pow(rightGoalRadius, 2) - Math.pow(x - rightGoalCenterX, 2));
+        if (!isNaN(halfHeight)) {
+            ctx.beginPath();
+            ctx.moveTo(x, rightGoalCenterY - halfHeight);
+            ctx.lineTo(x, rightGoalCenterY + halfHeight);
+            ctx.stroke();
+        }
+    }
+    
+    // Horizontal lines
+    for (let y = rightGoalCenterY - rightGoalRadius; y <= rightGoalCenterY + rightGoalRadius; y += spacing) {
+        const halfWidth = Math.sqrt(Math.pow(rightGoalRadius, 2) - Math.pow(y - rightGoalCenterY, 2));
+        if (!isNaN(halfWidth)) {
+            ctx.beginPath();
+            ctx.moveTo(rightGoalCenterX, y);
+            ctx.lineTo(rightGoalCenterX + halfWidth, y);
+            ctx.stroke();
+        }
+    }
+    
+    // Restore context
+    ctx.restore();
 }
-// Draw goal nets
-// Draw goal nets
-// Draw goal nets
-// Draw goal nets
-function drawGoalNets() {
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 1;
-    
-    // Left goal net - vertical lines
-    for (let i = 0; i <= 4; i++) {
-        ctx.beginPath();
-        ctx.moveTo(fieldDimensions.leftFence - i * (GOAL_DEPTH / 4), fieldDimensions.centerY - GOAL_WIDTH / 2);
-        ctx.lineTo(fieldDimensions.leftFence - i * (GOAL_DEPTH / 4), fieldDimensions.centerY + GOAL_WIDTH / 2);
-        ctx.stroke();
-    }
-    
-    // Left goal net - horizontal lines
-    for (let i = 0; i <= 4; i++) {
-        ctx.beginPath();
-        ctx.moveTo(fieldDimensions.leftFence, fieldDimensions.centerY - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
-        ctx.lineTo(fieldDimensions.leftFence - GOAL_DEPTH, fieldDimensions.centerY - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
-        ctx.stroke();
-    }
-    
-    // Right goal net - vertical lines
-    for (let i = 0; i <= 4; i++) {
-        ctx.beginPath();
-        ctx.moveTo(fieldDimensions.rightFence + i * (GOAL_DEPTH / 4), fieldDimensions.centerY - GOAL_WIDTH / 2);
-        ctx.lineTo(fieldDimensions.rightFence + i * (GOAL_DEPTH / 4), fieldDimensions.centerY + GOAL_WIDTH / 2);
-        ctx.stroke();
-    }
-    
-    // Right goal net - horizontal lines
-    for (let i = 0; i <= 4; i++) {
-        ctx.beginPath();
-        ctx.moveTo(fieldDimensions.rightFence, fieldDimensions.centerY - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
-        ctx.lineTo(fieldDimensions.rightFence + GOAL_DEPTH, fieldDimensions.centerY - GOAL_WIDTH / 2 + i * (GOAL_WIDTH / 4));
-        ctx.stroke();
-    }
-}
+
 
 // Draw fence
 function drawFence() {
+    const leftFence = fieldDimensions.leftFence;
+    const rightFence = fieldDimensions.rightFence;
+    const centerY = fieldDimensions.centerY;
+    const fieldHeight = fieldDimensions.height;
+    const goalWidth = gameState.stadiumConfig ? gameState.stadiumConfig.goalWidth : GOAL_WIDTH;
+    
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 3;
     ctx.beginPath();
     
     // Left side (connecting with goal posts)
-    ctx.moveTo(fieldDimensions.leftFence, 0);
-    ctx.lineTo(fieldDimensions.leftFence, fieldDimensions.centerY - GOAL_WIDTH / 2);
+    ctx.moveTo(leftFence, 0);
+    ctx.lineTo(leftFence, centerY - goalWidth / 2);
     
     // Resume after left goal
-    ctx.moveTo(fieldDimensions.leftFence, fieldDimensions.centerY + GOAL_WIDTH / 2);
-    ctx.lineTo(fieldDimensions.leftFence, fieldDimensions.height);
+    ctx.moveTo(leftFence, centerY + goalWidth / 2);
+    ctx.lineTo(leftFence, fieldHeight);
     
     // Bottom
-    ctx.lineTo(fieldDimensions.rightFence, fieldDimensions.height);
+    ctx.lineTo(rightFence, fieldHeight);
     
     // Right side (connecting with goal posts)
-    ctx.lineTo(fieldDimensions.rightFence, fieldDimensions.centerY + GOAL_WIDTH / 2);
+    ctx.lineTo(rightFence, centerY + goalWidth / 2);
     
     // Resume after right goal
-    ctx.moveTo(fieldDimensions.rightFence, fieldDimensions.centerY - GOAL_WIDTH / 2);
-    ctx.lineTo(fieldDimensions.rightFence, 0);
+    ctx.moveTo(rightFence, centerY - goalWidth / 2);
+    ctx.lineTo(rightFence, 0);
     
     // Top
-    ctx.lineTo(fieldDimensions.leftFence, 0);
+    ctx.lineTo(leftFence, 0);
     
     ctx.stroke();
 }
@@ -1106,16 +1571,42 @@ function drawKickoffCountdown() {
     ctx.fillStyle = gameState.kickoffTeam === 'red' ? '#e74c3c' : '#3498db';
     ctx.fillText(`${teamName} team kicks off`, fieldDimensions.centerX, fieldDimensions.centerY + 70);
 }
+function transformGameToCanvas(gameX, gameY) {
+    if (!gameState.canvasScale) {
+        // If no scaling defined, use 1:1 mapping
+        return { x: gameX, y: gameY };
+    }
+    
+    return {
+        x: gameX * gameState.canvasScale.x,
+        y: gameY * gameState.canvasScale.y
+    };
+}
+function transformCanvasToGame(canvasX, canvasY) {
+    if (!gameState.canvasScale) {
+        // If no scaling defined, use 1:1 mapping
+        return { x: canvasX, y: canvasY };
+    }
+    
+    return {
+        x: canvasX / gameState.canvasScale.x,
+        y: canvasY / gameState.canvasScale.y
+    };
+}
 // Draw players
 function drawPlayers() {
     if (!gameState.players) return;
     
-    // Draw all players
+    // Draw all players using GAME coordinates
     Object.values(gameState.players).forEach(player => {
         if (player.team === 'spectator') return;
         
         // Draw motion trail if player is moving fast enough
         drawPlayerMotionTrail(player);
+        
+        // Get player radius from stadium config if available
+        const playerRadius = gameState.stadiumConfig ? 
+            gameState.stadiumConfig.playerRadius : PLAYER_RADIUS;
         
         // Set color based on team
         if (player.team === 'red') {
@@ -1126,17 +1617,17 @@ function drawPlayers() {
         
         // Draw player circle
         ctx.beginPath();
-        ctx.arc(player.x, player.y, player.radius || PLAYER_RADIUS, 0, Math.PI * 2);
+        ctx.arc(player.x, player.y, player.radius || playerRadius, 0, Math.PI * 2);
         ctx.fill();
         
         // Player outline
         ctx.strokeStyle = 'white';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(player.x, player.y, player.radius || PLAYER_RADIUS, 0, Math.PI * 2);
+        ctx.arc(player.x, player.y, player.radius || playerRadius, 0, Math.PI * 2);
         ctx.stroke();
         
-        // Player name
+        // Player name - adjust for canvas scaling
         ctx.fillStyle = 'white';
         ctx.font = '12px Arial';
         ctx.textAlign = 'center';
@@ -1149,7 +1640,7 @@ function drawPlayers() {
                 ctx.strokeStyle = 'yellow';
                 ctx.lineWidth = 2.5;
                 ctx.beginPath();
-                ctx.arc(player.x, player.y, (player.radius || PLAYER_RADIUS) + pulseSize, 0, Math.PI * 2);
+                ctx.arc(player.x, player.y, (player.radius || playerRadius) + pulseSize, 0, Math.PI * 2);
                 ctx.stroke();
             } else {
                 // Default current player indicator
@@ -1157,16 +1648,16 @@ function drawPlayers() {
                 ctx.lineWidth = 2;
                 ctx.setLineDash([5, 3]);
                 ctx.beginPath();
-                ctx.arc(player.x, player.y, (player.radius || PLAYER_RADIUS) + 3, 0, Math.PI * 2);
+                ctx.arc(player.x, player.y, (player.radius || playerRadius) + 3, 0, Math.PI * 2);
                 ctx.stroke();
                 ctx.setLineDash([]);
             }
             
             // Only draw "You" text for current player
-            ctx.fillText('You', player.x, player.y - (player.radius || PLAYER_RADIUS) - 5);
+            ctx.fillText('You', player.x, player.y - (player.radius || playerRadius) - 5);
         } else {
             // Draw name for other players
-            ctx.fillText(player.name, player.x, player.y - (player.radius || PLAYER_RADIUS) - 5);
+            ctx.fillText(player.name, player.x, player.y - (player.radius || playerRadius) - 5);
         }
     });
 }
@@ -1204,17 +1695,21 @@ function drawPlayerMotionTrail(player) {
 function drawBall() {
     if (!gameState.ball) return;
     
+    // Get ball radius from stadium config if available
+    const ballRadius = gameState.stadiumConfig ? 
+        gameState.stadiumConfig.ballRadius : BALL_RADIUS;
+    
     // Ball circle
     ctx.fillStyle = 'white';
     ctx.beginPath();
-    ctx.arc(gameState.ball.x, gameState.ball.y, gameState.ball.radius || BALL_RADIUS, 0, Math.PI * 2);
+    ctx.arc(gameState.ball.x, gameState.ball.y, gameState.ball.radius || ballRadius, 0, Math.PI * 2);
     ctx.fill();
     
     // Ball outline
     ctx.strokeStyle = '#ddd';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(gameState.ball.x, gameState.ball.y, gameState.ball.radius || BALL_RADIUS, 0, Math.PI * 2);
+    ctx.arc(gameState.ball.x, gameState.ball.y, gameState.ball.radius || ballRadius, 0, Math.PI * 2);
     ctx.stroke();
     
     // Draw shadow
@@ -1222,9 +1717,9 @@ function drawBall() {
     ctx.beginPath();
     ctx.ellipse(
         gameState.ball.x, 
-        gameState.ball.y + (gameState.ball.radius || BALL_RADIUS) + 2, 
-        (gameState.ball.radius || BALL_RADIUS) * 0.8, 
-        (gameState.ball.radius || BALL_RADIUS) * 0.3, 
+        gameState.ball.y + (gameState.ball.radius || ballRadius) + 2, 
+        (gameState.ball.radius || ballRadius) * 0.8, 
+        (gameState.ball.radius || ballRadius) * 0.3, 
         0, 0, Math.PI * 2
     );
     ctx.fill();
@@ -1349,6 +1844,8 @@ function updateAndRenderParticles(delta) {
     }
 }
 function spawnTrailParticle(player) {
+    if (!player || !player.radius) return;
+    
     // Calculate offset from player center
     const offsetAngle = Math.random() * Math.PI * 2;
     const offsetDistance = player.radius * Math.random() * 0.7;
@@ -1357,8 +1854,8 @@ function spawnTrailParticle(player) {
     const particle = {
         x: player.x + Math.cos(offsetAngle) * offsetDistance,
         y: player.y + Math.sin(offsetAngle) * offsetDistance,
-        vx: -player.vx * (0.1 + Math.random() * 0.1), // Opposite direction of movement
-        vy: -player.vy * (0.1 + Math.random() * 0.1),
+        vx: -(player.vx || 0) * (0.1 + Math.random() * 0.1), // Opposite direction of movement
+        vy: -(player.vy || 0) * (0.1 + Math.random() * 0.1),
         size: 2 + Math.random() * 2,
         life: 400 + Math.random() * 200, // 400-600ms lifetime
         maxLife: 600,
@@ -1368,9 +1865,15 @@ function spawnTrailParticle(player) {
         type: 'trail'
     };
     
+    if (!gameState.particles) {
+        gameState.particles = [];
+    }
+    
     gameState.particles.push(particle);
 }
 function spawnBallTrailParticle(ball) {
+    if (!ball || !ball.radius) return;
+    
     // Calculate offset from ball center
     const offsetAngle = Math.random() * Math.PI * 2;
     const offsetDistance = ball.radius * Math.random() * 0.5;
@@ -1379,8 +1882,8 @@ function spawnBallTrailParticle(ball) {
     const particle = {
         x: ball.x + Math.cos(offsetAngle) * offsetDistance,
         y: ball.y + Math.sin(offsetAngle) * offsetDistance,
-        vx: -ball.vx * (0.05 + Math.random() * 0.05), // Opposite direction of movement
-        vy: -ball.vy * (0.05 + Math.random() * 0.05),
+        vx: -(ball.vx || 0) * (0.05 + Math.random() * 0.05), // Opposite direction of movement
+        vy: -(ball.vy || 0) * (0.05 + Math.random() * 0.05),
         size: 1.5 + Math.random() * 1.5,
         life: 300 + Math.random() * 200, // 300-500ms lifetime
         maxLife: 500,
@@ -1390,9 +1893,15 @@ function spawnBallTrailParticle(ball) {
         type: 'ball_trail'
     };
     
+    if (!gameState.particles) {
+        gameState.particles = [];
+    }
+    
     gameState.particles.push(particle);
 }
 function spawnGoalParticle(team, goalX, goalY) {
+    if (!goalX || !goalY) return;
+    
     // Team color
     const teamColor = team === 'red' ? '#e74c3c' : '#3498db';
     
@@ -1433,47 +1942,76 @@ function spawnGoalParticle(team, goalX, goalY) {
         rotationSpeed: (Math.random() - 0.5) * 5
     };
     
+    if (!gameState.goalParticles) {
+        gameState.goalParticles = [];
+    }
+    
     gameState.goalParticles.push(particle);
 }
 function renderParticles() {
+    // Make sure particle system is initialized
+    if (!gameState.hasOwnProperty('particles')) {
+        gameState.particles = [];
+        gameState.goalParticles = [];
+        gameState.particlesEnabled = true;
+        gameState.lastTrailTime = 0;
+        gameState.trailFrequency = 50;
+        gameState.goalCelebrationActive = false;
+        gameState.goalCelebrationStartTime = 0;
+        gameState.goalCelebrationDuration = 2500;
+        console.log("Particle system initialized during rendering");
+        return; // Skip first frame to allow initialization
+    }
+    
     if (!gameState.particlesEnabled) return;
     
     // Render trail particles
-    gameState.particles.forEach(particle => {
-        ctx.save();
-        ctx.globalAlpha = particle.opacity;
-        ctx.fillStyle = particle.color;
-        ctx.beginPath();
-        ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-    });
+    if (gameState.particles && gameState.particles.length > 0) {
+        gameState.particles.forEach(particle => {
+            if (!particle) return; // Skip undefined particles
+            
+            ctx.save();
+            ctx.globalAlpha = particle.opacity || 0.5;
+            ctx.fillStyle = particle.color || '#ffffff';
+            ctx.beginPath();
+            ctx.arc(particle.x, particle.y, particle.size || 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        });
+    }
     
     // Render goal celebration particles
-    gameState.goalParticles.forEach(particle => {
-        ctx.save();
-        ctx.globalAlpha = particle.opacity;
-        ctx.fillStyle = particle.color;
-        
-        // Draw different shapes for variety
-        if (Math.random() > 0.7) {
-            // Squares/diamonds
-            ctx.translate(particle.x, particle.y);
-            ctx.rotate(particle.rotation * Math.PI/180);
-            ctx.fillRect(-particle.size/2, -particle.size/2, particle.size, particle.size);
-        } else {
-            // Circles
-            ctx.beginPath();
-            ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        
-        ctx.restore();
-        
-        // Update particle rotation
-        particle.rotation += particle.rotationSpeed;
-    });
+    if (gameState.goalParticles && gameState.goalParticles.length > 0) {
+        gameState.goalParticles.forEach(particle => {
+            if (!particle) return; // Skip undefined particles
+            
+            ctx.save();
+            ctx.globalAlpha = particle.opacity || 0.5;
+            ctx.fillStyle = particle.color || '#ffffff';
+            
+            // Draw different shapes for variety
+            if (Math.random() > 0.7) {
+                // Squares/diamonds
+                ctx.translate(particle.x, particle.y);
+                ctx.rotate((particle.rotation || 0) * Math.PI/180);
+                ctx.fillRect(-(particle.size || 2)/2, -(particle.size || 2)/2, particle.size || 2, particle.size || 2);
+            } else {
+                // Circles
+                ctx.beginPath();
+                ctx.arc(particle.x, particle.y, particle.size || 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            ctx.restore();
+            
+            // Update particle rotation if it exists
+            if (particle.rotation !== undefined && particle.rotationSpeed !== undefined) {
+                particle.rotation += particle.rotationSpeed;
+            }
+        });
+    }
 }
+
 
  // Reset game state
     function resetGameState() {
