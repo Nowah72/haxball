@@ -71,7 +71,14 @@ document.addEventListener('DOMContentLoaded', function() {
         gameActive: false,
         ping: 0,
         kickoffStartTime: null,
-        kickoffCountdownComplete: false
+    kickoffCountdownComplete: false,
+    kickoffRestrictions: false,
+    frictionEnabled: true, // Can be toggled in settings if needed
+    frictionFactor: 0.90,  // Higher = more slippery (0.94-0.98 is a good range)
+    lastActiveInputTime: 0,
+    particles: [],          // Array to store active particles
+    goalParticles: [],      // Array to store goal celebration particles
+    particlesEnabled: true, // Flag to enable/disable particles (for performance)
     };
     let fieldInfo = {
         width: 0,
@@ -111,6 +118,12 @@ document.addEventListener('DOMContentLoaded', function() {
     socket.on('kickoff-countdown-complete', () => {
         // Logic to start the actual gameplay after countdown
         io.to(roomId).emit('kickoff-complete');
+    });
+    socket.on('kickoff-countdown', (data) => {
+        console.log('Kickoff countdown started');
+        gameState.kickoff = true;
+        gameState.kickoffStartTime = Date.now();
+        gameState.kickoffTeam = data.kickoffTeam;
     });
     
     socket.on('kickoff-complete', () => {
@@ -195,7 +208,7 @@ document.addEventListener('DOMContentLoaded', function() {
         gameState.kickoffRestrictions = true; // Add this line
         gameState.kickoffTeam = data.kickoffTeam; // Make sure this is set
         gameState.kickoffStartTime = null;
-        
+        initializeParticleSystem();
         // Display scores
         redScore.textContent = data.score.red;
         blueScore.textContent = data.score.blue;
@@ -284,6 +297,33 @@ document.addEventListener('DOMContentLoaded', function() {
             addChatMessage('System', `GOAL! ${scorerName} scored for ${teamName} team! (${score.red} - ${score.blue})`);
         } else {
             addChatMessage('System', `GOAL for ${teamName} team! (${score.red} - ${score.blue})`);
+        }
+        
+        // Trigger goal celebration effect - add this section
+        if (gameState.particlesEnabled) {
+            let goalX, goalY;
+            
+            // Determine which goal was scored in
+            if (team === 'red') {
+                // Red team scored, so the goal was in the right side (blue's goal)
+                goalX = fieldDimensions.rightFence;
+            } else {
+                // Blue team scored, so the goal was in the left side (red's goal)
+                goalX = fieldDimensions.leftFence;
+            }
+            goalY = fieldDimensions.centerY;
+            
+            // Store celebration info
+            gameState.goalCelebrationActive = true;
+            gameState.goalCelebrationStartTime = Date.now();
+            gameState.goalScoredTeam = team;
+            gameState.goalX = goalX;
+            gameState.goalY = goalY;
+            
+            // Initial burst of particles
+            for (let i = 0; i < 30; i++) {
+                spawnGoalParticle(team, goalX, goalY);
+            }
         }
     });
     
@@ -598,11 +638,19 @@ document.addEventListener('DOMContentLoaded', function() {
     function gameLoop() {
         if (!gameState.gameActive) return;
         
+        // Calculate delta time for smoother animations
+        const now = Date.now();
+        const delta = now - (gameState.lastFrameTime || now);
+        gameState.lastFrameTime = now;
+        
         // Send player input to server
         sendPlayerInput();
         
         // Perform client-side prediction if needed
         performClientPrediction();
+        
+        // Update particles - add this line
+        updateAndRenderParticles(delta);
         
         // Render game
         renderGame();
@@ -610,6 +658,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Continue loop
         requestAnimationFrame(gameLoop);
     }
+    
     function drawDebugInfo() {
         // Draw player positions received from server
         Object.values(gameState.players).forEach(player => {
@@ -657,6 +706,11 @@ document.addEventListener('DOMContentLoaded', function() {
             shoot: gameState.keysPressed['Space'] || false
         };
         
+        // Store the timestamp of the last input
+        if (input.left || input.right || input.up || input.down) {
+            currentPlayer.lastActiveInputTime = Date.now();
+        }
+        
         // Only send if input has changed
         const inputChanged = 
             input.left !== gameState.lastInput?.left ||
@@ -683,7 +737,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         // Calculate client-side predicted position
-        // This will make movement feel more responsive
         const input = gameState.lastInput || {};
         
         // Calculate direction from current input
@@ -700,65 +753,113 @@ document.addEventListener('DOMContentLoaded', function() {
             dy /= length;
         }
         
-        // Apply very small prediction (just enough to feel responsive)
-        // but not so much that server corrections are jarring
-        const PREDICTION_AMOUNT = 2;
+        // Apply prediction with smoother transition
         if (dx !== 0 || dy !== 0) {
+            // Active movement: apply normal acceleration-based movement
+            // The prediction should be small but noticeable for responsiveness
+            const PREDICTION_AMOUNT = 2.5; // Slightly increased for better responsiveness
             currentPlayer.x += dx * PREDICTION_AMOUNT;
             currentPlayer.y += dy * PREDICTION_AMOUNT;
+            
+            // Remember when player was last actively moving
+            currentPlayer.lastActiveInputTime = Date.now();
+        } else {
+            // No input: apply friction-based sliding for a natural slowdown
+            // (This simulates the server-side physics locally for better prediction)
+            if (gameState.frictionEnabled) {
+                // Apply client-side friction to match server's physics
+                if (Math.abs(currentPlayer.vx) > 0.1 || Math.abs(currentPlayer.vy) > 0.1) {
+                    // Predict friction effect on velocity
+                    currentPlayer.vx *= gameState.frictionFactor;
+                    currentPlayer.vy *= gameState.frictionFactor;
+                    
+                    // Apply predicted velocity
+                    currentPlayer.x += currentPlayer.vx * 0.5; // Partial application to avoid overestimation
+                    currentPlayer.y += currentPlayer.vy * 0.5;
+                }
+            }
         }
         
-        // Gradually interpolate back to server position
-        const LERP_FACTOR = 0.2;
-        currentPlayer.x = currentPlayer.x * (1 - LERP_FACTOR) + currentPlayer.serverX * LERP_FACTOR;
-        currentPlayer.y = currentPlayer.y * (1 - LERP_FACTOR) + currentPlayer.serverY * LERP_FACTOR;
+        // Smoothly interpolate to server position to correct errors
+        // Use adaptive interpolation rate based on time since last active input
+        const timeSinceInput = Date.now() - (currentPlayer.lastActiveInputTime || 0);
+        
+        // Calculate adaptive interpolation factorf
+        // - When actively moving, use lower correction (more client authority)
+        // - When sliding/not moving, use higher correction (more server authority)
+        let CORRECTION_FACTOR;
+        if (timeSinceInput < 100) {
+            // Very recently active - minimal correction
+            CORRECTION_FACTOR = 0.05;
+        } else if (timeSinceInput < 300) {
+            // Recently active - moderate correction
+            CORRECTION_FACTOR = 0.08;
+        } else {
+            // No recent input - stronger correction
+            CORRECTION_FACTOR = 0.12;
+        }
+        
+        // Apply the correction
+        currentPlayer.x = currentPlayer.x * (1 - CORRECTION_FACTOR) + currentPlayer.serverX * CORRECTION_FACTOR;
+        currentPlayer.y = currentPlayer.y * (1 - CORRECTION_FACTOR) + currentPlayer.serverY * CORRECTION_FACTOR;
+    }
+    function initializeParticleSystem() {
+        // Add some properties to the gameState object to track particles
+        gameState.lastTrailTime = 0;
+        gameState.trailFrequency = 50; // ms between trail particle spawns
+        gameState.goalCelebrationActive = false;
+        gameState.goalCelebrationStartTime = 0;
+        gameState.goalCelebrationDuration = 2500; // 2.5 seconds
     }
     
     // Render the game
     // Render the game
-function renderGame() {
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw field
-    drawField();
-    
-    // Draw players
-    drawPlayers();
-    
-    // Draw ball
-    drawBall();
-    
-    // Draw ping
-    drawPing();
-    
-    // Draw countdown animation if kickoff is active
-    if (gameState.kickoff) {
-        drawKickoffCountdown();
+    function renderGame() {
+        // Clear canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw field
+        drawField();
+        
+        // Draw players
+        drawPlayers();
+        
+        // Draw ball
+        drawBall();
+        
+        // Draw particles - add this line
+        renderParticles();
+        
+        // Draw ping
+        drawPing();
+        
+        // Draw countdown animation if kickoff is active
+        if (gameState.kickoff) {
+            drawKickoffCountdown();
+        }
     }
+function drawKickoffRestrictions() {
+    if (!gameState.kickoffTeam) return;
+    
+    // Draw semi-transparent center circle
+    const kickoffColor = gameState.kickoffTeam === 'red' ? 
+        'rgba(231, 76, 60, 0.2)' : 
+        'rgba(52, 152, 219, 0.2)';
+    
+    // Highlight center circle
+    ctx.fillStyle = kickoffColor;
+    ctx.beginPath();
+    ctx.arc(fieldDimensions.centerX, fieldDimensions.centerY, CENTER_CIRCLE_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Highlight the midline
+    ctx.strokeStyle = kickoffColor;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(fieldDimensions.centerX, 0);
+    ctx.lineTo(fieldDimensions.centerX, fieldDimensions.height);
+    ctx.stroke();
 }
-    function drawKickoffRestrictions() {
-        if (!gameState.kickoffTeam) return;
-        
-        // Draw semi-transparent center circle
-        const kickoffColor = gameState.kickoffTeam === 'red' ? 
-            'rgba(231, 76, 60, 0.2)' : 
-            'rgba(52, 152, 219, 0.2)';
-        
-        // Highlight center circle
-        ctx.fillStyle = kickoffColor;
-        ctx.beginPath();
-        ctx.arc(fieldDimensions.centerX, fieldDimensions.centerY, CENTER_CIRCLE_RADIUS, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // Highlight the midline
-        ctx.strokeStyle = kickoffColor;
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(fieldDimensions.centerX, 0);
-        ctx.lineTo(fieldDimensions.centerX, fieldDimensions.height);
-        ctx.stroke();
-    }
     
     // Draw the field
     function drawField() {
@@ -803,6 +904,9 @@ function renderGame() {
         // Draw goals and fence
         drawGoals();
         drawFence();
+        if (gameState.kickoffRestrictions) {
+            drawKickoffRestrictions();
+        }
     }
     
     
@@ -1131,6 +1235,244 @@ function drawPing() {
     ctx.font = '12px Arial';
     ctx.textAlign = 'right';
     ctx.fillText(`Ping: ${gameState.ping}ms`, fieldDimensions.width - 10, 20);
+}
+function updateAndRenderParticles(delta) {
+    if (!gameState.particlesEnabled) return;
+    
+    const currentTime = Date.now();
+    
+    // Process goal celebration if active
+    if (gameState.goalCelebrationActive) {
+        // Check if celebration has ended
+        if (currentTime - gameState.goalCelebrationStartTime > gameState.goalCelebrationDuration) {
+            gameState.goalCelebrationActive = false;
+            gameState.goalParticles = []; // Clear particles
+        } else {
+            // Spawn new celebration particles if needed
+            const elapsedTime = currentTime - gameState.goalCelebrationStartTime;
+            const celebrationProgress = elapsedTime / gameState.goalCelebrationDuration;
+            
+            // Reduce spawn rate over time
+            if (celebrationProgress < 0.8 && Math.random() < (0.6 * (1 - celebrationProgress))) {
+                const spawnCount = Math.floor(3 + Math.random() * 2); // 3-4 particles per batch
+                for (let i = 0; i < spawnCount; i++) {
+                    spawnGoalParticle(gameState.goalScoredTeam, gameState.goalX, gameState.goalY);
+                }
+            }
+        }
+    }
+    
+    // Update player trail particles
+    if (gameState.gameActive && currentTime - gameState.lastTrailTime > gameState.trailFrequency) {
+        gameState.lastTrailTime = currentTime;
+        
+        // Generate trail particles for fast-moving players
+        Object.values(gameState.players).forEach(player => {
+            if (player.team === 'spectator') return;
+            
+            // Calculate player speed
+            const speed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+            
+            // Only create trail for players moving above a certain speed
+            if (speed > 3) {
+                // Spawn more particles for faster players
+                const particleCount = Math.min(Math.floor(speed / 2), 3);
+                
+                for (let i = 0; i < particleCount; i++) {
+                    spawnTrailParticle(player);
+                }
+            }
+        });
+        
+        // Generate subtle trail for fast-moving ball
+        if (gameState.ball) {
+            const ballSpeed = Math.sqrt(gameState.ball.vx * gameState.ball.vx + gameState.ball.vy * gameState.ball.vy);
+            if (ballSpeed > 5) {
+                const particleCount = Math.min(Math.floor(ballSpeed / 3), 2);
+                for (let i = 0; i < particleCount; i++) {
+                    spawnBallTrailParticle(gameState.ball);
+                }
+            }
+        }
+    }
+    
+    // Update trail particles
+    for (let i = gameState.particles.length - 1; i >= 0; i--) {
+        const particle = gameState.particles[i];
+        
+        // Update particle position
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        
+        // Update particle lifetime
+        particle.life -= delta || 16; // Use 16ms as default if delta not provided
+        
+        // Apply drag/friction
+        particle.vx *= 0.96;
+        particle.vy *= 0.96;
+        
+        // Fade out based on remaining life
+        particle.opacity = (particle.life / particle.maxLife) * particle.initialOpacity;
+        
+        // Remove dead particles
+        if (particle.life <= 0) {
+            gameState.particles.splice(i, 1);
+        }
+    }
+    
+    // Update goal celebration particles
+    for (let i = gameState.goalParticles.length - 1; i >= 0; i--) {
+        const particle = gameState.goalParticles[i];
+        
+        // Update particle position
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+        
+        // Apply gravity
+        particle.vy += 0.03;
+        
+        // Apply drag
+        particle.vx *= 0.98;
+        particle.vy *= 0.98;
+        
+        // Update particle lifetime
+        particle.life -= delta || 16;
+        
+        // Update size and opacity
+        particle.size = particle.initialSize * (particle.life / particle.maxLife);
+        particle.opacity = (particle.life / particle.maxLife) * particle.initialOpacity;
+        
+        // Remove dead particles
+        if (particle.life <= 0) {
+            gameState.goalParticles.splice(i, 1);
+        }
+    }
+}
+function spawnTrailParticle(player) {
+    // Calculate offset from player center
+    const offsetAngle = Math.random() * Math.PI * 2;
+    const offsetDistance = player.radius * Math.random() * 0.7;
+    
+    // Create particle
+    const particle = {
+        x: player.x + Math.cos(offsetAngle) * offsetDistance,
+        y: player.y + Math.sin(offsetAngle) * offsetDistance,
+        vx: -player.vx * (0.1 + Math.random() * 0.1), // Opposite direction of movement
+        vy: -player.vy * (0.1 + Math.random() * 0.1),
+        size: 2 + Math.random() * 2,
+        life: 400 + Math.random() * 200, // 400-600ms lifetime
+        maxLife: 600,
+        color: player.team === 'red' ? '#e74c3c' : '#3498db',
+        initialOpacity: 0.3 + Math.random() * 0.2, // Subtle opacity
+        opacity: 0.5,
+        type: 'trail'
+    };
+    
+    gameState.particles.push(particle);
+}
+function spawnBallTrailParticle(ball) {
+    // Calculate offset from ball center
+    const offsetAngle = Math.random() * Math.PI * 2;
+    const offsetDistance = ball.radius * Math.random() * 0.5;
+    
+    // Create particle
+    const particle = {
+        x: ball.x + Math.cos(offsetAngle) * offsetDistance,
+        y: ball.y + Math.sin(offsetAngle) * offsetDistance,
+        vx: -ball.vx * (0.05 + Math.random() * 0.05), // Opposite direction of movement
+        vy: -ball.vy * (0.05 + Math.random() * 0.05),
+        size: 1.5 + Math.random() * 1.5,
+        life: 300 + Math.random() * 200, // 300-500ms lifetime
+        maxLife: 500,
+        color: '#ffffff',
+        initialOpacity: 0.2 + Math.random() * 0.15, // Very subtle opacity
+        opacity: 0.3,
+        type: 'ball_trail'
+    };
+    
+    gameState.particles.push(particle);
+}
+function spawnGoalParticle(team, goalX, goalY) {
+    // Team color
+    const teamColor = team === 'red' ? '#e74c3c' : '#3498db';
+    
+    // Random colors, primarily team color but with some whites and other accents
+    let color;
+    const colorRandom = Math.random();
+    if (colorRandom < 0.7) {
+        color = teamColor; // 70% team color
+    } else if (colorRandom < 0.85) {
+        color = '#ffffff'; // 15% white
+    } else {
+        color = team === 'red' ? '#f39c12' : '#2ecc71'; // 15% accent color
+    }
+    
+    // Calculate spawn position near goal posts
+    const spawnOffsetX = (Math.random() * 80) - 40; // -40 to 40 pixels
+    const spawnOffsetY = (Math.random() * 80) - 40; // -40 to 40 pixels
+    
+    // Calculate initial velocity - explode outward from goal
+    const angle = Math.atan2(spawnOffsetY, spawnOffsetX);
+    const speed = 1 + Math.random() * 2; // Base speed
+    
+    // Create particle
+    const particle = {
+        x: goalX + spawnOffsetX,
+        y: goalY + spawnOffsetY,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 1 - Math.random(),  // Initial upward boost
+        size: 2 + Math.random() * 3,
+        initialSize: 2 + Math.random() * 3,
+        life: 800 + Math.random() * 1200, // 0.8-2 seconds lifetime
+        maxLife: 2000,
+        color: color,
+        initialOpacity: 0.5 + Math.random() * 0.5,
+        opacity: 0.7,
+        type: 'goal',
+        rotation: Math.random() * 360,
+        rotationSpeed: (Math.random() - 0.5) * 5
+    };
+    
+    gameState.goalParticles.push(particle);
+}
+function renderParticles() {
+    if (!gameState.particlesEnabled) return;
+    
+    // Render trail particles
+    gameState.particles.forEach(particle => {
+        ctx.save();
+        ctx.globalAlpha = particle.opacity;
+        ctx.fillStyle = particle.color;
+        ctx.beginPath();
+        ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    });
+    
+    // Render goal celebration particles
+    gameState.goalParticles.forEach(particle => {
+        ctx.save();
+        ctx.globalAlpha = particle.opacity;
+        ctx.fillStyle = particle.color;
+        
+        // Draw different shapes for variety
+        if (Math.random() > 0.7) {
+            // Squares/diamonds
+            ctx.translate(particle.x, particle.y);
+            ctx.rotate(particle.rotation * Math.PI/180);
+            ctx.fillRect(-particle.size/2, -particle.size/2, particle.size, particle.size);
+        } else {
+            // Circles
+            ctx.beginPath();
+            ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        ctx.restore();
+        
+        // Update particle rotation
+        particle.rotation += particle.rotationSpeed;
+    });
 }
 
  // Reset game state
