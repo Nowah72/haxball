@@ -24,6 +24,45 @@ const EXACT_CENTER_X = 580;
 const EXACT_CENTER_Y = 405;
 const LEFT_FENCE = EXACT_CENTER_X - (EXACT_WIDTH / 2) + FENCE_WIDTH;
 const RIGHT_FENCE = EXACT_CENTER_X + (EXACT_WIDTH / 2) - FENCE_WIDTH;
+const STADIUM_CONFIGS = {
+    small: {
+        width: 700,
+        height: 450,
+        centerX: 350,
+        centerY: 225,
+        fenceWidth: 35,  // Smaller fence width
+        goalWidth: 70,   // Smaller goal width
+        goalDepth: 30,   // Smaller goal depth
+        ballRadius: 8,   // Slightly smaller ball
+        playerRadius: 13, // Slightly smaller players
+        name: 'Small Stadium'
+    },
+    medium: {
+        // This matches your current stadium configuration
+        width: 1000,
+        height: 600, 
+        centerX: 500,
+        centerY: 300,
+        fenceWidth: 45,
+        goalWidth: 100,
+        goalDepth: 40,
+        ballRadius: 10,
+        playerRadius: 15,
+        name: 'Medium Stadium'
+    },
+    large: {
+        width: 1300,
+        height: 800,
+        centerX: 650,
+        centerY: 400,
+        fenceWidth: 55,  // Larger fence width
+        goalWidth: 130,  // Larger goal width
+        goalDepth: 50,   // Larger goal depth
+        ballRadius: 12,  // Slightly larger ball
+        playerRadius: 17, // Slightly larger players
+        name: 'Large Stadium'
+    }
+};
 
 
 // Game state
@@ -33,7 +72,15 @@ const gameState = {
 };
 
 // Create a new room
-function createRoom(roomId, hostId) {
+function createRoom(roomId, hostId, stadiumId = 'medium') {
+    // Get the stadium configuration (default to medium if invalid)
+    const stadiumConfig = STADIUM_CONFIGS[stadiumId] || STADIUM_CONFIGS.medium;
+    
+    // Calculate fence positions based on stadium dimensions
+    // These must be EXACT calculations
+    const leftFence = stadiumConfig.fenceWidth;
+    const rightFence = stadiumConfig.width - stadiumConfig.fenceWidth;
+    
     gameState.rooms[roomId] = {
         id: roomId,
         hostId: hostId,
@@ -48,33 +95,45 @@ function createRoom(roomId, hostId) {
             blue: 0
         },
         ball: {
-            x: EXACT_CENTER_X,
-            y: EXACT_CENTER_Y,
+            x: stadiumConfig.centerX,  // Exactly center X
+            y: stadiumConfig.centerY,  // Exactly center Y
             vx: 0,
             vy: 0,
-            radius: BALL_RADIUS
+            radius: stadiumConfig.ballRadius
         },
         gameActive: false,
         kickoff: false,
         kickoffTeam: null,
         lastTouched: null,
+        stadiumId: stadiumId,
+        stadiumConfig: stadiumConfig,
         settings: {
             startingTeam: 'random',
             gameDuration: 5 // minutes
         },
-        // Field dimensions with exact values
-        fieldWidth: EXACT_WIDTH,
-        fieldHeight: EXACT_HEIGHT,
-        // Playable area with exact values
+        // Field dimensions with stadium-specific values - EXACT values
+        fieldWidth: stadiumConfig.width,
+        fieldHeight: stadiumConfig.height,
+        // Playable area with stadium-specific values - EXACT values
         playableArea: {
-            left: LEFT_FENCE,
-            right: RIGHT_FENCE,
+            left: leftFence,
+            right: rightFence,
             top: 0,
-            bottom: EXACT_HEIGHT,
-            centerX: EXACT_CENTER_X,
-            centerY: EXACT_CENTER_Y
+            bottom: stadiumConfig.height,
+            centerX: stadiumConfig.centerX,
+            centerY: stadiumConfig.centerY
         }
     };
+    
+    console.log(`Created room with ${stadiumId} stadium:`, {
+        width: stadiumConfig.width,
+        height: stadiumConfig.height,
+        centerX: stadiumConfig.centerX,
+        centerY: stadiumConfig.centerY,
+        leftFence: leftFence,
+        rightFence: rightFence
+    });
+    
     return gameState.rooms[roomId];
 }
 
@@ -83,7 +142,16 @@ function joinRoom(roomId, playerId, playerName) {
     const room = gameState.rooms[roomId];
     if (!room) return null;
     
-    // Add player to room
+    // Check if player is already in the room - prevent duplicates
+    if (room.players[playerId]) {
+        console.log(`Player ${playerId} already in room ${roomId}`);
+        return room;
+    }
+    
+    // Get the stadium configuration
+    const stadiumConfig = room.stadiumConfig || STADIUM_CONFIGS.medium;
+    
+    // Add player to room with stadium-specific player radius
     room.players[playerId] = {
         id: playerId,
         name: playerName,
@@ -93,7 +161,7 @@ function joinRoom(roomId, playerId, playerName) {
         y: 0,
         vx: 0,
         vy: 0,
-        radius: PLAYER_RADIUS,
+        radius: stadiumConfig.playerRadius,
         damping: 0.92
     };
     
@@ -166,12 +234,15 @@ io.on('connection', (socket) => {
     });
     
     // Create a new room
-    socket.on('create-room', () => {
+    socket.on('create-room', (data) => {
         const player = gameState.players[socket.id];
         if (!player) return;
         
+        // Extract stadium ID from data (default to medium if not provided)
+        const stadiumId = data?.stadiumId || 'medium';
+        
         const roomId = generateRoomId();
-        const room = createRoom(roomId, socket.id);
+        const room = createRoom(roomId, socket.id, stadiumId);
         
         // Join the room
         socket.join(roomId);
@@ -180,13 +251,15 @@ io.on('connection', (socket) => {
         // Join as player in the room
         joinRoom(roomId, socket.id, player.name);
         
-        console.log(`Room ${roomId} created by ${player.name}`);
+        console.log(`Room ${roomId} created by ${player.name} with stadium: ${stadiumId}`);
         socket.emit('room-created', roomId);
         socket.emit('room-joined', {
             roomId: roomId,
             players: room.players,
             teams: room.teams,
-            isHost: true
+            isHost: true,
+            stadiumId: stadiumId,
+            stadiumName: STADIUM_CONFIGS[stadiumId].name
         });
     });
     
@@ -268,31 +341,41 @@ io.on('connection', (socket) => {
         
         const room = gameState.rooms[player.currentRoom];
         
-        // ALWAYS use our exact hardcoded values regardless of what client reports
-        room.fieldWidth = EXACT_WIDTH;
-        room.fieldHeight = EXACT_HEIGHT;
+        // Use EXACT stadium-specific values
+        const stadiumConfig = room.stadiumConfig || STADIUM_CONFIGS.medium;
         
-        // Update playable area with exact hardcoded values
+        // Calculate fence positions based on stadium dimensions
+        // These must be EXACT calculations
+        const leftFence = stadiumConfig.fenceWidth;
+        const rightFence = stadiumConfig.width - stadiumConfig.fenceWidth;
+        
+        // Update playable area with EXACT stadium-specific values
         room.playableArea = {
-            left: LEFT_FENCE,
-            right: RIGHT_FENCE,
+            left: leftFence,
+            right: rightFence,
             top: 0,
-            bottom: EXACT_HEIGHT,
-            centerX: EXACT_CENTER_X,
-            centerY: EXACT_CENTER_Y
+            bottom: stadiumConfig.height,
+            centerX: stadiumConfig.centerX,
+            centerY: stadiumConfig.centerY
         };
         
-        console.log(`Using exact field dimensions: ${EXACT_WIDTH}x${EXACT_HEIGHT}`);
-        console.log(`Field center: (${EXACT_CENTER_X}, ${EXACT_CENTER_Y})`);
-        console.log(`Playable area: [${LEFT_FENCE}, ${0}] to [${RIGHT_FENCE}, ${EXACT_HEIGHT}]`);
+        // Log EXACT dimensions for debugging
+        console.log(`Using EXACT stadium dimensions for ${room.stadiumId}:`, {
+            width: stadiumConfig.width,
+            height: stadiumConfig.height,
+            centerX: stadiumConfig.centerX,
+            centerY: stadiumConfig.centerY,
+            leftFence: leftFence,
+            rightFence: rightFence
+        });
         
-        // If game is active, reset positions to match the exact values
+        // If game is active, reset positions to match the stadium values
         if (room.gameActive) {
-            // Reset ball to exact center
-            room.ball.x = EXACT_CENTER_X;
-            room.ball.y = EXACT_CENTER_Y;
+            // Reset ball to stadium center - EXACT position
+            room.ball.x = stadiumConfig.centerX;
+            room.ball.y = stadiumConfig.centerY;
             
-            // Reposition players
+            // Reposition players with EXACT values
             positionPlayers(room);
         }
     });
@@ -335,16 +418,21 @@ io.on('connection', (socket) => {
         }
         
         room.kickoff = true;
-    room.kickoffRestrictions = true; // Add this line
-    
-    // Notify all players that game is starting
-    io.to(player.currentRoom).emit('game-started', {
-        ball: room.ball,
-        players: room.players,
-        score: room.score,
-        kickoffTeam: room.kickoffTeam
-    });
-    
+        room.kickoffRestrictions = true; 
+        
+        // Log for debugging
+        console.log(`Game starting with ${room.kickoffTeam} team kickoff`);
+        
+        // Notify all players that game is starting
+        io.to(player.currentRoom).emit('game-started', {
+            ball: room.ball,
+            players: room.players,
+            score: room.score,
+            kickoffTeam: room.kickoffTeam,
+            stadiumId: room.stadiumId,
+            stadiumConfig: room.stadiumConfig
+        });
+        
     // Start kickoff countdown
     io.to(player.currentRoom).emit('kickoff-countdown', {
         kickoffTeam: room.kickoffTeam
@@ -428,15 +516,29 @@ socket.on('kickoff-countdown-complete', () => {
 
 // Position players on the field using playable area
 function positionPlayers(room) {
-    console.log("Positioning players using exact coordinates");
+    console.log("Positioning players using EXACT stadium-specific coordinates");
     
-    // Position red team on left side
+    // Get stadium config
+    const stadiumConfig = room.stadiumConfig;
+    if (!stadiumConfig) {
+        console.error("Error: stadiumConfig not defined for room");
+        return;
+    }
+    
+    // Get playable area - use direct stadium values for positioning
+    const centerX = stadiumConfig.centerX;
+    const centerY = stadiumConfig.centerY;
+    const leftFence = stadiumConfig.fenceWidth;
+    const rightFence = stadiumConfig.width - stadiumConfig.fenceWidth;
+    const fieldWidth = stadiumConfig.width;
+    
+    // Position red team on left side - use EXACT positioning
     room.teams.red.forEach((playerRef, index) => {
         const gamePlayer = room.players[playerRef.id];
         if (gamePlayer) {
-            // Position in left quarter of playable area
-            gamePlayer.x = LEFT_FENCE + (RIGHT_FENCE - LEFT_FENCE) / 4;
-            gamePlayer.y = EXACT_CENTER_Y + (index - (room.teams.red.length - 1) / 2) * 50;
+            // Position in left quarter of field - EXACT calculation
+            gamePlayer.x = leftFence + (fieldWidth / 6); // 1/6 of the way from left fence
+            gamePlayer.y = centerY + (index - (room.teams.red.length - 1) / 2) * 50;
             gamePlayer.vx = 0;
             gamePlayer.vy = 0;
             gamePlayer.damping = 0.92;
@@ -445,13 +547,13 @@ function positionPlayers(room) {
         }
     });
     
-    // Position blue team on right side
+    // Position blue team on right side - use EXACT positioning
     room.teams.blue.forEach((playerRef, index) => {
         const gamePlayer = room.players[playerRef.id];
         if (gamePlayer) {
-            // Position in right quarter of playable area
-            gamePlayer.x = RIGHT_FENCE - (RIGHT_FENCE - LEFT_FENCE) / 4;
-            gamePlayer.y = EXACT_CENTER_Y + (index - (room.teams.blue.length - 1) / 2) * 50;
+            // Position in right quarter of field - EXACT calculation
+            gamePlayer.x = rightFence - (fieldWidth / 6); // 1/6 of the way from right fence
+            gamePlayer.y = centerY + (index - (room.teams.blue.length - 1) / 2) * 50;
             gamePlayer.vx = 0;
             gamePlayer.vy = 0;
             gamePlayer.damping = 0.92;
@@ -500,21 +602,24 @@ function updateGame(room) {
             // Apply kickoff restrictions
             if (room.kickoff || room.kickoffRestrictions) {
                 const isKickoffTeam = player.team === room.kickoffTeam;
-                const CENTER_CIRCLE_RADIUS = 60; // Match visual center circle
+                // Get the stadium config from the room
+                const stadiumConfig = room.stadiumConfig || STADIUM_CONFIGS.medium;
+                // Calculate center circle radius based on stadium width
+                const CENTER_CIRCLE_RADIUS = Math.round(60 * (stadiumConfig.width / 1000)); 
                 
                 // Enforce kickoff restrictions
                 if (!isKickoffTeam) {
                     // Non-kickoff team can't enter center circle
-                    const distToCenter = getDistance(player.x, player.y, EXACT_CENTER_X, EXACT_CENTER_Y);
+                    const distToCenter = getDistance(player.x, player.y, playableArea.centerX, playableArea.centerY);
                     if (distToCenter < CENTER_CIRCLE_RADIUS) {
                         // Calculate angle from center to player
-                        const angle = Math.atan2(player.y - EXACT_CENTER_Y, player.x - EXACT_CENTER_X);
+                        const angle = Math.atan2(player.y - playableArea.centerY, player.x - playableArea.centerX);
                         
                         // Smooth push out with slight bounce
-                        player.x = EXACT_CENTER_X + Math.cos(angle) * (CENTER_CIRCLE_RADIUS + player.radius + 0.1);
-                        player.y = EXACT_CENTER_Y + Math.sin(angle) * (CENTER_CIRCLE_RADIUS + player.radius + 0.1);
+                        player.x = playableArea.centerX + Math.cos(angle) * (CENTER_CIRCLE_RADIUS + player.radius + 0.1);
+                        player.y = playableArea.centerY + Math.sin(angle) * (CENTER_CIRCLE_RADIUS + player.radius + 0.1);
                         
-                        // Bounce with reduced velocity (30% of original)
+                        // Bounce with reduced velocity
                         const dot = player.vx * Math.cos(angle) + player.vy * Math.sin(angle);
                         player.vx -= 0.6 * dot * Math.cos(angle);
                         player.vy -= 0.6 * dot * Math.sin(angle);
@@ -526,34 +631,22 @@ function updateGame(room) {
                     }
                 }
                 
-                // For midline collision in kickoff (both for kickoff team and non-kickoff team):
-                if ((player.team === 'red' && player.x > EXACT_CENTER_X) ||
-                    (player.team === 'blue' && player.x < EXACT_CENTER_X)) {
+                // For midline collision (both for kickoff team and non-kickoff team):
+                if ((player.team === 'red' && player.x > playableArea.centerX) ||
+                    (player.team === 'blue' && player.x < playableArea.centerX)) {
                     
                     // Position player just to their side of midline with slight offset
                     if (player.team === 'red') {
-                        player.x = EXACT_CENTER_X - player.radius - 0.2;
+                        player.x = playableArea.centerX - player.radius - 0.5;
                     } else {
-                        player.x = EXACT_CENTER_X + player.radius + 0.2;
+                        player.x = playableArea.centerX + player.radius + 0.5;
                     }
                     
-                    // Bounce with reduced velocity
-                    player.vx = -player.vx * 0.3;
+                    // Bounce with increased velocity for better feedback
+                    player.vx = -player.vx * 0.5;
                     
                     // Add slight y velocity to prevent sticking
-                    player.vy += (Math.random() - 0.5) * 0.2;
-                } else {
-                    // KICKOFF TEAM ALSO can't cross midline until ball is touched
-                    if ((player.team === 'red' && player.x > EXACT_CENTER_X) ||
-                        (player.team === 'blue' && player.x < EXACT_CENTER_X)) {
-                        // Push back to own half
-                        if (player.team === 'red') {
-                            player.x = EXACT_CENTER_X - 1;
-                        } else {
-                            player.x = EXACT_CENTER_X + 1;
-                        }
-                        player.vx = 0;
-                    }
+                    player.vy += (Math.random() - 0.5) * 0.3;
                 }
             }
             
@@ -1039,14 +1132,18 @@ function scoreGoal(room, team) {
     // Next kickoff is for the team that conceded
     const kickoffTeam = team === 'red' ? 'blue' : 'red';
     
-    // Reset ball to exact center coordinates
+    // Reset ball to exact center coordinates based on stadium config
+    const stadiumConfig = room.stadiumConfig || STADIUM_CONFIGS.medium;
     room.ball = {
-        x: EXACT_CENTER_X,
-        y: EXACT_CENTER_Y,
+        x: stadiumConfig.centerX,
+        y: stadiumConfig.centerY,
         vx: 0,
         vy: 0,
-        radius: BALL_RADIUS
+        radius: stadiumConfig.ballRadius
     };
+    
+    // Log the exact ball placement for debugging
+    console.log(`Ball reset to ${room.ball.x}, ${room.ball.y} for ${kickoffTeam} kickoff`);
     
     positionPlayers(room);
     
