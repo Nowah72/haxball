@@ -346,11 +346,27 @@ io.on('connection', (socket) => {
     });
     
     // Start kickoff countdown
-    setTimeout(() => {
-        room.kickoff = false;
-        // Note: kickoffRestrictions remains true until ball is touched
-        io.to(player.currentRoom).emit('kickoff-complete');
-    }, 3000);
+    io.to(player.currentRoom).emit('kickoff-countdown', {
+        kickoffTeam: room.kickoffTeam
+    });
+});
+socket.on('kickoff-countdown-complete', () => {
+    const player = gameState.players[socket.id];
+    if (!player || !player.currentRoom) return;
+    
+    const room = gameState.rooms[player.currentRoom];
+    if (!room || !room.gameActive || !room.kickoff) return;
+    
+    // Only accept this from the host
+    if (room.hostId !== socket.id) return;
+    
+    // End kickoff
+    room.kickoff = false;
+    
+    // Note: kickoffRestrictions remains true until ball is touched
+    io.to(player.currentRoom).emit('kickoff-complete');
+    
+    console.log(`Kickoff countdown complete in room ${player.currentRoom}`);
 });
     
     // Player input
@@ -556,36 +572,80 @@ function updateGame(room) {
             }
             
             // Apply movement with acceleration
-            const PLAYER_SPEED = 3.5;
-            const PLAYER_ACCELERATION = 0.4;
-            const PLAYER_DAMPING = 0.92;
-            const PLAYER_SLIDE_FACTOR = 0.96; // Higher value = more slide
+             // Apply movement with improved physics
+        const PLAYER_BASE_SPEED = 3.5;
+        const PLAYER_ACCELERATION = 0.25; // Slightly reduced for smoother acceleration
+        const PLAYER_MAX_SPEED = 4.2;     // Slightly increased for better feel
+        
+        // We'll have different movement parameters for active vs. sliding motion
+        if (dx !== 0 || dy !== 0) {
+            // ACTIVE MOVEMENT: Player is pressing keys
             
-            // Only apply acceleration if user is actively pressing keys
-            if (dx !== 0 || dy !== 0) {
-                // Target velocity
-                const targetVx = dx * PLAYER_SPEED;
-                const targetVy = dy * PLAYER_SPEED;
-                
-                // Smoothly approach target velocity
-                player.vx += (targetVx - player.vx) * PLAYER_ACCELERATION;
-                player.vy += (targetVy - player.vy) * PLAYER_ACCELERATION;
-                
-                // Cap at maximum speed
-                const PLAYER_MAX_SPEED = 5;
-                const currentSpeed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
-                if (currentSpeed > PLAYER_MAX_SPEED) {
-                    const scale = PLAYER_MAX_SPEED / currentSpeed;
-                    player.vx *= scale;
-                    player.vy *= scale;
-                }
-                
-                // Apply normal damping when actively moving
-                player.damping = PLAYER_DAMPING;
-            } else {
-                // Apply slide factor for gradual slowdown when not pressing keys
-                player.damping = PLAYER_SLIDE_FACTOR;
+            // Set active movement mode
+            player.isActivelyMoving = true;
+            player.lastActiveTime = Date.now();
+            
+            // Target velocity based on input direction
+            const targetVx = dx * PLAYER_BASE_SPEED;
+            const targetVy = dy * PLAYER_BASE_SPEED;
+            
+            // Smoothly approach target velocity
+            player.vx += (targetVx - player.vx) * PLAYER_ACCELERATION;
+            player.vy += (targetVy - player.vy) * PLAYER_ACCELERATION;
+            
+            // Cap at maximum speed
+            const currentSpeed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+            if (currentSpeed > PLAYER_MAX_SPEED) {
+                const scale = PLAYER_MAX_SPEED / currentSpeed;
+                player.vx *= scale;
+                player.vy *= scale;
             }
+            
+            // When actively moving, use constant damping value
+            player.damping = 0.92;
+        } else {
+            // SLIDING MOVEMENT: No keys pressed, player is sliding
+            
+            // Set sliding mode
+            player.isActivelyMoving = false;
+            
+            // Apply dynamic damping for natural deceleration
+            // The physics here is critical for smooth sliding
+            
+            // Calculate time-based friction
+            const timeSinceActive = Date.now() - (player.lastActiveTime || 0);
+            
+            // Sliding friction increases slightly over time
+            // This creates a more natural motion where the player 
+            // initially glides and then gradually slows down
+            
+            // Calculate sliding friction factor
+            let slidingFriction;
+            if (timeSinceActive < 100) {
+                // Just started sliding - low friction
+                slidingFriction = 0.93; // High value = more slippery
+            } else if (timeSinceActive < 300) {
+                // Sliding for a bit - medium friction
+                slidingFriction = 0.92;
+            } else if (timeSinceActive < 600) {
+                // Sliding longer - increasing friction
+                slidingFriction = 0.90;
+            } else {
+                // Long slide - higher friction to stop
+                slidingFriction = 0.88;
+            }
+            
+            // Apply the sliding friction
+            player.damping = slidingFriction;
+            
+            // Apply minimum velocity threshold to prevent jittery tiny movements
+            // When speed gets very low, just stop completely
+            const currentSpeed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+            if (currentSpeed < 0.05) {
+                player.vx = 0;
+                player.vy = 0;
+            }
+        }
             
             // Handle shooting
             if (shoot) {
@@ -623,6 +683,31 @@ function updateGame(room) {
                 }
             }
         }
+        const nextX = player.x + player.vx;
+    const nextY = player.y + player.vy;
+    
+    // Check for collisions before updating position
+    // This prevents the player from clipping through walls
+    let collided = false;
+    
+    // Check if the next position would cause a collision
+    // If not, move normally
+    if (!wouldCollideWithWall(nextX, nextY, player.radius, room.playableArea)) {
+        player.x = nextX;
+        player.y = nextY;
+    } else {
+        // Handle collision with improved physics
+        handleImprovedCollision(player, room.playableArea);
+        collided = true;
+    }
+    
+    // Apply appropriate damping based on player state
+    player.vx *= player.damping || 0.92;
+    player.vy *= player.damping || 0.92;
+    
+    // Stop very small movements to prevent jittering
+    if (Math.abs(player.vx) < 0.05) player.vx = 0;
+    if (Math.abs(player.vy) < 0.05) player.vy = 0;
     });
     
     // Update player positions
@@ -825,6 +910,97 @@ function updateGame(room) {
         scoreGoal(room, 'red');
     }
 }
+function wouldCollideWithWall(x, y, radius, playableArea) {
+    // Check top and bottom walls
+    if (y - radius < 0 || y + radius > playableArea.bottom) {
+        return true;
+    }
+    
+    // Check left fence (excluding goal)
+    if (x - radius < playableArea.left && 
+        (y < playableArea.centerY - GOAL_WIDTH / 2 || y > playableArea.centerY + GOAL_WIDTH / 2)) {
+        return true;
+    }
+    
+    // Check right fence (excluding goal)
+    if (x + radius > playableArea.right && 
+        (y < playableArea.centerY - GOAL_WIDTH / 2 || y > playableArea.centerY + GOAL_WIDTH / 2)) {
+        return true;
+    }
+    
+    // Check goal back walls
+    if (x - radius < 0 && 
+        y > playableArea.centerY - GOAL_WIDTH / 2 && 
+        y < playableArea.centerY + GOAL_WIDTH / 2) {
+        return true;
+    }
+    
+    if (x + radius > playableArea.right + FENCE_WIDTH && 
+        y > playableArea.centerY - GOAL_WIDTH / 2 && 
+        y < playableArea.centerY + GOAL_WIDTH / 2) {
+        return true;
+    }
+    
+    return false;
+}
+function handleImprovedCollision(player, playableArea) {
+    // Determine which boundary the player collided with
+    
+    // Top wall
+    if (player.y - player.radius < 0) {
+        player.y = player.radius + 0.1;
+        player.vy = -player.vy * 0.5; // Bounce with reduced velocity
+        
+        // Add slight sideways impulse to prevent sticking
+        player.vx += (Math.random() - 0.5) * 0.2;
+    }
+    
+    // Bottom wall
+    if (player.y + player.radius > playableArea.bottom) {
+        player.y = playableArea.bottom - player.radius - 0.1;
+        player.vy = -player.vy * 0.5;
+        
+        // Add slight sideways impulse to prevent sticking
+        player.vx += (Math.random() - 0.5) * 0.2;
+    }
+    
+    // Left fence
+    if (player.x - player.radius < playableArea.left && 
+        (player.y < playableArea.centerY - GOAL_WIDTH / 2 || 
+         player.y > playableArea.centerY + GOAL_WIDTH / 2)) {
+        player.x = playableArea.left + player.radius + 0.1;
+        player.vx = -player.vx * 0.5;
+        
+        // Add slight vertical impulse to prevent sticking
+        player.vy += (Math.random() - 0.5) * 0.2;
+    }
+    
+    // Right fence
+    if (player.x + player.radius > playableArea.right && 
+        (player.y < playableArea.centerY - GOAL_WIDTH / 2 || 
+         player.y > playableArea.centerY + GOAL_WIDTH / 2)) {
+        player.x = playableArea.right - player.radius - 0.1;
+        player.vx = -player.vx * 0.5;
+        
+        // Add slight vertical impulse to prevent sticking
+        player.vy += (Math.random() - 0.5) * 0.2;
+    }
+    
+    // Goal back walls
+    if (player.x - player.radius < 0 && 
+        player.y > playableArea.centerY - GOAL_WIDTH / 2 && 
+        player.y < playableArea.centerY + GOAL_WIDTH / 2) {
+        player.x = 0 + player.radius + 0.1;
+        player.vx = -player.vx * 0.5;
+    }
+    
+    if (player.x + player.radius > playableArea.right + FENCE_WIDTH && 
+        player.y > playableArea.centerY - GOAL_WIDTH / 2 && 
+        player.y < playableArea.centerY + GOAL_WIDTH / 2) {
+        player.x = playableArea.right + FENCE_WIDTH - player.radius - 0.1;
+        player.vx = -player.vx * 0.5;
+    }
+}
 function handleSmoothCollision(player, boundary, axis, direction) {
     // Calculate how far past the boundary the player went
     const overlap = Math.abs(player[axis] - boundary) + 0.1;
@@ -879,11 +1055,10 @@ function scoreGoal(room, team) {
     room.kickoffRestrictions = true;
     room.kickoffTeam = kickoffTeam;
     
-    // End kickoff after 3 seconds
-    setTimeout(() => {
-        room.kickoff = false;
-        io.to(room.id).emit('kickoff-complete');
-    }, 3000);
+    // Trigger kickoff countdown on client
+    io.to(room.id).emit('kickoff-countdown', {
+        kickoffTeam: kickoffTeam
+    });
 }
 
 // Helper function to calculate distance
